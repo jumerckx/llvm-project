@@ -64,15 +64,27 @@ static bool canBeCalledWithBarePointers(gpu::GPUFuncOp func) {
   return canBeBare;
 }
 
-Value getLaneId(ConversionPatternRewriter &rewriter, Location loc,
+Value amd::getLaneId(ConversionPatternRewriter &rewriter, Location loc,
                 const unsigned indexBitwidth) {
-  auto int32Type = IntegerType::get(rewriter.getContext(), 32);
-  Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  Value minus1 = rewriter.create<arith::ConstantIntOp>(loc, -1, 32);
-  Value mbcntLo = rewriter.create<ROCDL::MbcntLoOp>(loc, int32Type,
-                                                    ValueRange{minus1, zero});
-  Value laneId = rewriter.create<ROCDL::MbcntHiOp>(loc, int32Type,
+  // convert to:  %mlo = call @llvm.amdgcn.mbcnt.lo(-1, 0)
+  // followed by: %lid = call @llvm.amdgcn.mbcnt.hi(-1, %mlo)
+  MLIRContext *context = rewriter.getContext();
+  Type intTy = IntegerType::get(context, 32);
+  Value zero = rewriter.createOrFold<arith::ConstantIntOp>(loc, 0, 32);
+  Value minus1 = rewriter.createOrFold<arith::ConstantIntOp>(loc, -1, 32);
+  Value mbcntLo =
+      rewriter.create<ROCDL::MbcntLoOp>(loc, intTy, ValueRange{minus1, zero});
+  Value laneId = rewriter.create<ROCDL::MbcntHiOp>(loc, intTy,
                                                    ValueRange{minus1, mbcntLo});
+  // Truncate or extend the result depending on the index bitwidth specified
+  // by the LLVMTypeConverter options.
+  if (indexBitwidth > 32) {
+    laneId = rewriter.create<LLVM::SExtOp>(
+        loc, IntegerType::get(context, indexBitwidth), laneId);
+  } else if (indexBitwidth < 32) {
+    laneId = rewriter.create<LLVM::TruncOp>(
+        loc, IntegerType::get(context, indexBitwidth), laneId);
+  }
   return laneId;
 }
 static constexpr StringLiteral amdgcnDataLayout =
@@ -88,29 +100,9 @@ struct GPULaneIdOpToROCDL : ConvertOpToLLVMPattern<gpu::LaneIdOp> {
   LogicalResult
   matchAndRewrite(gpu::LaneIdOp op, gpu::LaneIdOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op->getLoc();
-    MLIRContext *context = rewriter.getContext();
-    // convert to:  %mlo = call @llvm.amdgcn.mbcnt.lo(-1, 0)
-    // followed by: %lid = call @llvm.amdgcn.mbcnt.hi(-1, %mlo)
-
-    Type intTy = IntegerType::get(context, 32);
-    Value zero = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    Value minus1 = rewriter.create<arith::ConstantIntOp>(loc, -1, 32);
-    Value mbcntLo =
-        rewriter.create<ROCDL::MbcntLoOp>(loc, intTy, ValueRange{minus1, zero});
-    Value laneId = rewriter.create<ROCDL::MbcntHiOp>(
-        loc, intTy, ValueRange{minus1, mbcntLo});
-    // Truncate or extend the result depending on the index bitwidth specified
-    // by the LLVMTypeConverter options.
-    const unsigned indexBitwidth = getTypeConverter()->getIndexTypeBitwidth();
-    if (indexBitwidth > 32) {
-      laneId = rewriter.create<LLVM::SExtOp>(
-          loc, IntegerType::get(context, indexBitwidth), laneId);
-    } else if (indexBitwidth < 32) {
-      laneId = rewriter.create<LLVM::TruncOp>(
-          loc, IntegerType::get(context, indexBitwidth), laneId);
-    }
-    rewriter.replaceOp(op, {laneId});
+    rewriter.replaceOp(
+        op, {amd::getLaneId(rewriter, op->getLoc(),
+                            getTypeConverter()->getIndexTypeBitwidth())});
     return success();
   }
 };
@@ -141,8 +133,7 @@ struct GPUShuffleOpLowering : public ConvertOpToLLVMPattern<gpu::ShuffleOp> {
     // TODO: Add support for non 32-bit shuffle values.
     if (adaptor.getValue().getType().getIntOrFloatBitWidth() != 32)
       return failure();
-    const unsigned indexBitwidth = getTypeConverter()->getIndexTypeBitwidth();
-    Value srcLaneId = getLaneId(rewriter, loc, indexBitwidth);
+    Value srcLaneId = amd::getLaneId(rewriter, op->getLoc(), 32);
 
     auto int32Type = IntegerType::get(rewriter.getContext(), 32);
     Value width = adaptor.getWidth();
