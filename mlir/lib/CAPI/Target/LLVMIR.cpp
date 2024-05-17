@@ -18,6 +18,7 @@
 #include "mlir/CAPI/Support.h"
 #include "mlir/CAPI/Wrap.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
 
@@ -33,4 +34,27 @@ LLVMModuleRef mlirTranslateModuleToLLVMIR(MlirOperation module,
   LLVMModuleRef moduleRef = llvm::wrap(llvmModule.release());
 
   return moduleRef;
+}
+
+MlirStringRef mlirSerializeGPUModuleOp(MlirOperation op) {
+  
+  auto op_unwrapped = dyn_cast<gpu::GPUModuleOp>(unwrap(op));
+  auto targets = op_unwrapped.getTargetsAttr();
+  auto target = dyn_cast<gpu::TargetAttrInterface>(targets.getValue()[0]);
+  assert(target && "Target attribute doesn't implements `TargetAttrInterface`.");
+
+  gpu::TargetOptions options("", {}, "", gpu::CompilationTarget::Assembly);
+
+  std::optional<llvm::SmallVector<char, 0U>> serialized = target.serializeToObject(op_unwrapped, options);
+  
+  if (serialized.has_value()) {
+    auto data = serialized->data();
+    auto size = serialized->size();
+    char* c_data = static_cast<char*>(std::malloc(size));
+    std::memcpy(c_data, data, size);
+    return mlirStringRefCreate(c_data, size);
+  }
+  else {
+    return mlirStringRefCreate(nullptr, 0);
+  }
 }

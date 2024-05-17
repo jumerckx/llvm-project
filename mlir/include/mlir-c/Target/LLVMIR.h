@@ -32,6 +32,7 @@ extern "C" {
 MLIR_CAPI_EXPORTED LLVMModuleRef
 mlirTranslateModuleToLLVMIR(MlirOperation module, LLVMContextRef context);
 
+MLIR_CAPI_EXPORTED MlirStringRef mlirSerializeGPUModuleOp(MlirOperation op);
 #ifdef __cplusplus
 }
 #endif
