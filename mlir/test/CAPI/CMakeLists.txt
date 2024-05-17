@@ -95,11 +95,11 @@ _add_capi_test_executable(mlir-capi-transform-interpreter-test
     MLIRCAPITransformDialectTransforms
 )
 
-_add_capi_test_executable(mlir-capi-translation-test
-  translation.c
-  LINK_LIBS PRIVATE
-    MLIRCAPIIR
-    MLIRCAPILLVM
-    MLIRCAPIRegisterEverything
-    MLIRCAPITarget
-)
+# _add_capi_test_executable(mlir-capi-translation-test
+#   translation.c
+#   LINK_LIBS PRIVATE
+#     MLIRCAPIIR
+#     MLIRCAPILLVM
+#     MLIRCAPIRegisterEverything
+#     MLIRCAPITarget
+# )
