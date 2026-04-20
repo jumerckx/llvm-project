@@ -16,6 +16,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugLog.h"
+#include "llvm/Support/Process.h"
 #include <queue>
 
 #define DEBUG_TYPE "pdl-predicate-tree"
@@ -27,11 +28,49 @@ using namespace mlir::pdl_to_pdl_interp;
 // Debug Logging Helpers
 //===----------------------------------------------------------------------===//
 
+/// Helper to apply color to the debug stream. We write ANSI escape codes
+/// directly because LDBG's raw_ldbg_ostream wrapper does not forward
+/// has_colors()/changeColor() to the underlying stream.
+static void applyColor(llvm::raw_ostream &os, llvm::raw_ostream::Colors color,
+                        bool bold = false) {
+  if (!llvm::dbgs().has_colors())
+    return;
+  if (const char *code =
+          llvm::sys::Process::OutputColor(static_cast<char>(color), bold, false))
+    os << code;
+}
+
+/// Helper to reset color on the debug stream.
+static void resetColor(llvm::raw_ostream &os) {
+  if (!llvm::dbgs().has_colors())
+    return;
+  if (const char *code = llvm::sys::Process::ResetColor())
+    os << code;
+}
+
+/// Returns a color for a specific position kind.
+static llvm::raw_ostream::Colors getPositionColor(Predicates::Kind kind) {
+  switch (kind) {
+  case Predicates::OperationPos: return llvm::raw_ostream::RED;
+  case Predicates::OperandPos:
+  case Predicates::OperandGroupPos: return llvm::raw_ostream::BLUE;
+  case Predicates::ResultPos:
+  case Predicates::ResultGroupPos: return llvm::raw_ostream::YELLOW;
+  case Predicates::AttributePos:
+  case Predicates::AttributeLiteralPos: return llvm::raw_ostream::GREEN;
+  case Predicates::TypePos:
+  case Predicates::TypeLiteralPos: return llvm::raw_ostream::MAGENTA;
+  case Predicates::ConstraintResultPos: return llvm::raw_ostream::CYAN;
+  default: return llvm::raw_ostream::WHITE;
+  }
+}
+
 static llvm::raw_ostream &printPosition(llvm::raw_ostream &os, Position *pos) {
   if (!pos) {
     os << "<null>";
     return os;
   }
+  applyColor(os, getPositionColor(pos->getKind()), /*bold=*/true);
   switch (pos->getKind()) {
   case Predicates::OperationPos: {
     auto *opPos = cast<OperationPosition>(pos);
@@ -106,6 +145,7 @@ static llvm::raw_ostream &printPosition(llvm::raw_ostream &os, Position *pos) {
     os << "unknownPos";
     break;
   }
+  resetColor(os);
   // Print the parent chain compactly.
   if (Position *parent = pos->getParent()) {
     os << " <- ";
@@ -119,6 +159,11 @@ static llvm::raw_ostream &printQualifier(llvm::raw_ostream &os, Qualifier *q) {
     os << "<null>";
     return os;
   }
+  // Questions are highlighted in Bold Cyan, Answers in normal Green/Yellow
+  bool isQuestion = q->getKind() <= Predicates::ConstraintQuestion;
+  if (isQuestion)
+    applyColor(os, llvm::raw_ostream::CYAN, /*bold=*/true);
+
   switch (q->getKind()) {
   // Questions
   case Predicates::IsNotNullQuestion:
@@ -164,11 +209,13 @@ static llvm::raw_ostream &printQualifier(llvm::raw_ostream &os, Qualifier *q) {
   }
   // Answers
   case Predicates::AttributeAnswer: {
+    applyColor(os, llvm::raw_ostream::GREEN);
     auto *a = cast<AttributeAnswer>(q);
     os << "attr=" << a->getValue();
     break;
   }
   case Predicates::OperationNameAnswer: {
+    applyColor(os, llvm::raw_ostream::YELLOW);
     auto *a = cast<OperationNameAnswer>(q);
     os << "name=\"" << a->getValue().getStringRef() << "\"";
     break;
@@ -180,11 +227,13 @@ static llvm::raw_ostream &printQualifier(llvm::raw_ostream &os, Qualifier *q) {
     os << "false";
     break;
   case Predicates::TypeAnswer: {
+    applyColor(os, llvm::raw_ostream::MAGENTA);
     auto *a = cast<TypeAnswer>(q);
     os << "type=" << a->getValue();
     break;
   }
   case Predicates::UnsignedAnswer: {
+    applyColor(os, llvm::raw_ostream::YELLOW);
     auto *a = cast<UnsignedAnswer>(q);
     os << "unsigned=" << a->getValue();
     break;
@@ -193,6 +242,7 @@ static llvm::raw_ostream &printQualifier(llvm::raw_ostream &os, Qualifier *q) {
     os << "unknownQualifier";
     break;
   }
+  resetColor(os);
   return os;
 }
 
@@ -205,16 +255,15 @@ static llvm::StringRef getPatternName(Operation *op) {
 static void logPredicateList(llvm::StringRef label,
                              const std::vector<PositionalPredicate> &predList) {
   LDBG() << label << " (" << predList.size() << " predicates):";
-  for (const auto &[idx, pred] : llvm::enumerate(predList)) {
-    std::string posStr, questionStr, answerStr;
-    {
-      llvm::raw_string_ostream posOS(posStr), qOS(questionStr), aOS(answerStr);
-      printPosition(posOS, pred.position);
-      printQualifier(qOS, pred.question);
-      printQualifier(aOS, pred.answer);
-    }
-    LDBG() << "  [" << idx << "] pos=" << posStr << "  question=" << questionStr
-           << "  answer=" << answerStr;
+  for (auto it : llvm::enumerate(predList)) {
+    LDBG_OS([&](llvm::raw_ostream &os) {
+      os << "  [" << it.index() << "] pos=";
+      printPosition(os, it.value().position);
+      os << "  question=";
+      printQualifier(os, it.value().question);
+      os << "  answer=";
+      printQualifier(os, it.value().answer);
+    });
   }
 }
 
