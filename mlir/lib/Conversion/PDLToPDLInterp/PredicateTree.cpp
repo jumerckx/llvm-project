@@ -24,6 +24,201 @@ using namespace mlir;
 using namespace mlir::pdl_to_pdl_interp;
 
 //===----------------------------------------------------------------------===//
+// Debug Logging Helpers
+//===----------------------------------------------------------------------===//
+
+static llvm::raw_ostream &printPosition(llvm::raw_ostream &os, Position *pos) {
+  if (!pos) {
+    os << "<null>";
+    return os;
+  }
+  switch (pos->getKind()) {
+  case Predicates::OperationPos: {
+    auto *opPos = cast<OperationPosition>(pos);
+    if (opPos->isRoot())
+      os << "op[root]";
+    else
+      os << "op[depth=" << opPos->getDepth() << "]";
+    break;
+  }
+  case Predicates::OperandPos: {
+    auto *operandPos = cast<OperandPosition>(pos);
+    os << "operand#" << operandPos->getOperandNumber();
+    break;
+  }
+  case Predicates::OperandGroupPos: {
+    auto *grpPos = cast<OperandGroupPosition>(pos);
+    if (auto num = grpPos->getOperandGroupNumber())
+      os << "operandGroup#" << *num;
+    else
+      os << "operandGroup[all]";
+    if (grpPos->isVariadic())
+      os << "(variadic)";
+    break;
+  }
+  case Predicates::AttributePos: {
+    auto *attrPos = cast<AttributePosition>(pos);
+    os << "attr<" << attrPos->getName().getValue() << ">";
+    break;
+  }
+  case Predicates::ConstraintResultPos: {
+    auto *cPos = cast<ConstraintPosition>(pos);
+    os << "constraintResult#" << cPos->getIndex();
+    break;
+  }
+  case Predicates::ResultPos: {
+    auto *resPos = cast<ResultPosition>(pos);
+    os << "result#" << resPos->getResultNumber();
+    break;
+  }
+  case Predicates::ResultGroupPos: {
+    auto *grpPos = cast<ResultGroupPosition>(pos);
+    if (auto num = grpPos->getResultGroupNumber())
+      os << "resultGroup#" << *num;
+    else
+      os << "resultGroup[all]";
+    if (grpPos->isVariadic())
+      os << "(variadic)";
+    break;
+  }
+  case Predicates::TypePos:
+    os << "type";
+    break;
+  case Predicates::AttributeLiteralPos: {
+    auto *litPos = cast<AttributeLiteralPosition>(pos);
+    os << "attrLiteral(" << litPos->getValue() << ")";
+    break;
+  }
+  case Predicates::TypeLiteralPos: {
+    auto *litPos = cast<TypeLiteralPosition>(pos);
+    os << "typeLiteral(" << litPos->getValue() << ")";
+    break;
+  }
+  case Predicates::UsersPos:
+    os << "users";
+    break;
+  case Predicates::ForEachPos: {
+    auto *fePos = cast<ForEachPosition>(pos);
+    os << "forEach#" << fePos->getID();
+    break;
+  }
+  default:
+    os << "unknownPos";
+    break;
+  }
+  // Print the parent chain compactly.
+  if (Position *parent = pos->getParent()) {
+    os << " <- ";
+    printPosition(os, parent);
+  }
+  return os;
+}
+
+static llvm::raw_ostream &printQualifier(llvm::raw_ostream &os, Qualifier *q) {
+  if (!q) {
+    os << "<null>";
+    return os;
+  }
+  switch (q->getKind()) {
+  // Questions
+  case Predicates::IsNotNullQuestion:
+    os << "isNotNull?";
+    break;
+  case Predicates::OperationNameQuestion:
+    os << "operationName?";
+    break;
+  case Predicates::TypeQuestion:
+    os << "type?";
+    break;
+  case Predicates::AttributeQuestion:
+    os << "attribute?";
+    break;
+  case Predicates::OperandCountAtLeastQuestion:
+    os << "operandCountAtLeast?";
+    break;
+  case Predicates::OperandCountQuestion:
+    os << "operandCount?";
+    break;
+  case Predicates::ResultCountAtLeastQuestion:
+    os << "resultCountAtLeast?";
+    break;
+  case Predicates::ResultCountQuestion:
+    os << "resultCount?";
+    break;
+  case Predicates::EqualToQuestion: {
+    auto *eq = cast<EqualToQuestion>(q);
+    os << "equalTo?(";
+    printPosition(os, eq->getValue());
+    os << ")";
+    break;
+  }
+  case Predicates::ConstraintQuestion: {
+    auto *cq = cast<ConstraintQuestion>(q);
+    os << "constraint<" << cq->getName() << ">(";
+    llvm::interleaveComma(cq->getArgs(), os,
+                          [&](Position *p) { printPosition(os, p); });
+    os << ")";
+    if (cq->getIsNegated())
+      os << "[negated]";
+    break;
+  }
+  // Answers
+  case Predicates::AttributeAnswer: {
+    auto *a = cast<AttributeAnswer>(q);
+    os << "attr=" << a->getValue();
+    break;
+  }
+  case Predicates::OperationNameAnswer: {
+    auto *a = cast<OperationNameAnswer>(q);
+    os << "name=\"" << a->getValue().getStringRef() << "\"";
+    break;
+  }
+  case Predicates::TrueAnswer:
+    os << "true";
+    break;
+  case Predicates::FalseAnswer:
+    os << "false";
+    break;
+  case Predicates::TypeAnswer: {
+    auto *a = cast<TypeAnswer>(q);
+    os << "type=" << a->getValue();
+    break;
+  }
+  case Predicates::UnsignedAnswer: {
+    auto *a = cast<UnsignedAnswer>(q);
+    os << "unsigned=" << a->getValue();
+    break;
+  }
+  default:
+    os << "unknownQualifier";
+    break;
+  }
+  return os;
+}
+
+static llvm::StringRef getPatternName(Operation *op) {
+  if (auto name = op->getAttrOfType<StringAttr>("sym_name"))
+    return name.getValue();
+  return "<unnamed>";
+}
+
+static void logPredicateList(llvm::StringRef label,
+                             const std::vector<PositionalPredicate> &predList) {
+  LDBG() << label << " (" << predList.size() << " predicates):";
+  for (const auto &[idx, pred] : llvm::enumerate(predList)) {
+    std::string posStr, questionStr, answerStr;
+    {
+      llvm::raw_string_ostream posOS(posStr), qOS(questionStr), aOS(answerStr);
+      printPosition(posOS, pred.position);
+      printQualifier(qOS, pred.question);
+      printQualifier(aOS, pred.answer);
+    }
+    LDBG() << "  [" << idx << "] pos=" << posStr << "  question=" << questionStr
+           << "  answer=" << answerStr;
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Predicate List Building
 //===----------------------------------------------------------------------===//
 
@@ -407,6 +602,15 @@ static SmallVector<Value> detectRoots(pdl::PatternOp pattern) {
     if (!used.contains(operationOp))
       roots.push_back(operationOp);
 
+  LDBG() << "=== detectRoots for pattern @" << getPatternName(pattern);
+  LDBG() << "  Total operations in pattern: "
+         << std::distance(pattern.getBodyRegion().getOps<pdl::OperationOp>().begin(),
+                          pattern.getBodyRegion().getOps<pdl::OperationOp>().end());
+  LDBG() << "  Detected " << roots.size() << " root(s)"
+         << (roots.size() > 1 ? " (MULTI-ROOT PATTERN)" : "");
+  for (const auto &[idx, root] : llvm::enumerate(roots))
+    LDBG() << "    root[" << idx << "]: " << root;
+
   return roots;
 }
 
@@ -661,16 +865,19 @@ static Value buildPredicateList(pdl::PatternOp pattern,
       LDBG() << "  * " << edge.first;
   }
 
-  LDBG() << "Calling key getTreePredicates (Value: " << bestRoot << ")";
+  LDBG() << "=== Phase 1: Tree predicates from best root ===";
+  LDBG() << "  Best root: " << bestRoot;
 
   // The best root is the starting point for the traversal. Get the tree
   // predicates for the DAG rooted at bestRoot.
   getTreePredicates(predList, bestRoot, builder, valueToPosition,
                     builder.getRoot());
+  logPredicateList("After tree predicates (downward from root)", predList);
 
   // Traverse the selected optimal branching. For all edges in order, traverse
   // up starting from the connector, until the candidate root is reached, and
   // call getTreePredicates at every node along the way.
+  LDBG() << "=== Phase 2: Upward traversals for multi-root edges ===";
   for (const auto &it : llvm::enumerate(bestEdges)) {
     Value target = it.value().first;
     Value source = it.value().second;
@@ -679,27 +886,56 @@ static Value buildPredicateList(pdl::PatternOp pattern,
     // 1) the initial root (bestRoot);
     // 2) a root that is dominated by (contained in the subtree rooted at) an
     //    already visited root.
-    if (valueToPosition.count(target))
+    if (valueToPosition.count(target)) {
+      LDBG() << "  Edge[" << it.index() << "]: target " << target
+             << " already visited, skipping";
       continue;
+    }
 
     // Determine the connector.
     Value connector = graph[target][source].connector;
     assert(connector && "invalid edge");
-    LDBG() << "  * Connector: " << connector.getLoc();
+    LDBG() << "  Edge[" << it.index()
+           << "]: upward traversal from connector to target root";
+    LDBG() << "    source: " << source;
+    LDBG() << "    target: " << target;
+    LDBG() << "    connector: " << connector << " (loc=" << connector.getLoc()
+           << ")";
     DenseMap<Value, OpIndex> parentMap = parentMaps.lookup(target);
     Position *pos = valueToPosition.lookup(connector);
     assert(pos && "connector has not been traversed yet");
+    {
+      std::string posStr;
+      llvm::raw_string_ostream posOS(posStr);
+      printPosition(posOS, pos);
+      LDBG() << "    connector position: " << posStr;
+    }
 
     // Traverse from the connector upwards towards the target root.
+    unsigned step = 0;
     for (Value value = connector; value != target;) {
       OpIndex opIndex = parentMap.lookup(value);
       assert(opIndex.parent && "missing parent");
+      LDBG() << "    step[" << step++ << "]: " << value << " -> parent "
+             << opIndex.parent
+             << (opIndex.index ? " (operand#" + std::to_string(*opIndex.index) +
+                                     ")"
+                               : " (all operands)");
+      size_t predsBefore = predList.size();
       visitUpward(predList, opIndex, builder, valueToPosition, pos, it.index());
+      LDBG() << "      added " << (predList.size() - predsBefore)
+             << " predicates";
       value = opIndex.parent;
     }
   }
+  logPredicateList("After upward traversals", predList);
 
+  LDBG() << "=== Phase 3: Non-tree predicates ===";
+  size_t predsBefore = predList.size();
   getNonTreePredicates(pattern, predList, builder, valueToPosition);
+  LDBG() << "  Added " << (predList.size() - predsBefore)
+         << " non-tree predicates";
+  logPredicateList("Final predicate list for pattern", predList);
 
   return bestRoot;
 }
@@ -952,10 +1188,19 @@ MatcherNode::generateMatcherTree(ModuleOp module, PredicateBuilder &builder,
   };
 
   SmallVector<PatternPredicates, 16> patternsAndPredicates;
+  LDBG() << "============================================================";
+  LDBG() << "=== generateMatcherTree: collecting predicates from all patterns ===";
+  LDBG() << "============================================================";
   for (pdl::PatternOp pattern : module.getOps<pdl::PatternOp>()) {
+    LDBG() << "";
+    LDBG() << ">>> Processing pattern @" << getPatternName(pattern)
+           << " (benefit=" << pattern.getBenefit() << ")";
     std::vector<PositionalPredicate> predicateList;
     Value root =
         buildPredicateList(pattern, builder, predicateList, valueToPosition);
+    LDBG() << "<<< Pattern @" << getPatternName(pattern)
+           << ": chosen root = " << root << ", " << predicateList.size()
+           << " predicates";
     patternsAndPredicates.emplace_back(pattern, root, std::move(predicateList));
   }
 
@@ -1013,10 +1258,53 @@ MatcherNode::generateMatcherTree(ModuleOp module, PredicateBuilder &builder,
   // ConstraintQuestions come after the results they use.
   stableTopologicalSort(ordered.begin(), ordered.end(), dependsOn);
 
+  LDBG() << "";
+  LDBG() << "=== Ordered predicates (global, " << ordered.size()
+         << " unique predicates) ===";
+  for (const auto &[idx, pred] : llvm::enumerate(ordered)) {
+    std::string posStr, questionStr;
+    {
+      llvm::raw_string_ostream posOS(posStr), qOS(questionStr);
+      printPosition(posOS, pred->position);
+      printQualifier(qOS, pred->question);
+    }
+    LDBG() << "  [" << idx << "] id=" << pred->id
+           << " primary=" << pred->primary << " secondary=" << pred->secondary
+           << "  pos=" << posStr << "  question=" << questionStr;
+    for (auto &[pattern, answer] : pred->patternToAnswer) {
+      std::string ansStr;
+      llvm::raw_string_ostream aOS(ansStr);
+      printQualifier(aOS, answer);
+      LDBG() << "      pattern @" << getPatternName(pattern) << " -> " << ansStr;
+    }
+  }
+
+  LDBG() << "";
+  LDBG() << "=== Per-pattern predicate sets ===";
+  for (auto &&[idx, list] : llvm::enumerate(lists)) {
+    LDBG() << "  Pattern @" << getPatternName(list.pattern)
+           << " (root=" << list.root << "): " << list.predicates.size()
+           << " predicates";
+    for (auto *pred : list.predicates) {
+      std::string posStr, questionStr;
+      {
+        llvm::raw_string_ostream posOS(posStr), qOS(questionStr);
+        printPosition(posOS, pred->position);
+        printQualifier(qOS, pred->question);
+      }
+      LDBG() << "    id=" << pred->id << " pos=" << posStr
+             << " question=" << questionStr;
+    }
+  }
+
   // Build the matchers for each of the pattern predicate lists.
+  LDBG() << "";
+  LDBG() << "=== Propagating patterns into matcher tree ===";
   std::unique_ptr<MatcherNode> root;
-  for (OrderedPredicateList &list : lists)
+  for (auto &&[idx, list] : llvm::enumerate(lists)) {
+    LDBG() << "  Propagating pattern @" << getPatternName(list.pattern);
     propagatePattern(root, list, ordered.begin(), ordered.end());
+  }
 
   // Collapse the graph and insert the exit node.
   foldSwitchToBool(root);
