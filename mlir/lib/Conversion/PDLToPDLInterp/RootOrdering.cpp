@@ -15,7 +15,10 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/DebugLog.h"
 #include <utility>
+
+#define DEBUG_TYPE "pdl-predicate-tree"
 
 using namespace mlir;
 using namespace mlir::pdl_to_pdl_interp;
@@ -124,6 +127,8 @@ unsigned OptimalBranching::solve() {
   parents[root] = Value();
   unsigned totalCost = 0;
 
+  LDBG() << "  OptimalBranching::solve() with root: " << root;
+
   // A map that stores the cost of the optimal local choice for each node
   // in a directed cycle. This map is cleared every time we seed the search.
   DenseMap<Value, unsigned> parentDepths;
@@ -149,13 +154,19 @@ unsigned OptimalBranching::solve() {
       // tie breaking rules.
       Value &bestSource = parents[node];
       std::pair<unsigned, unsigned> bestCost;
+      LDBG() << "    Evaluating edges into node: " << node;
       for (const auto &inner : it->second) {
         const RootOrderingEntry &entry = inner.second;
+        LDBG() << "      candidate parent: " << inner.first
+               << " cost=(" << entry.cost.first << "," << entry.cost.second
+               << ") connector=" << entry.connector;
         if (!bestSource /* initial */ || bestCost > entry.cost) {
           bestSource = inner.first;
           bestCost = entry.cost;
         }
       }
+      LDBG() << "      -> best parent: " << bestSource
+             << " cost=(" << bestCost.first << "," << bestCost.second << ")";
       assert(bestSource && "the graph is not strongly connected");
       parentDepths[node] = bestCost.first;
       node = bestSource;
@@ -164,8 +175,12 @@ unsigned OptimalBranching::solve() {
 
     // If we reached a non-root node, we have a cycle.
     if (parentDepths.count(node)) {
+      LDBG() << "    Cycle detected at node: " << node;
       // Determine the cycle starting at the representative node.
       SmallVector<Value> cycle = getCycle(parents, node);
+      LDBG() << "    Cycle nodes:";
+      for (Value v : cycle)
+        LDBG() << "      " << v;
 
       // The following maps disambiguate the source / target of the edges
       // going out of / into the cycle.
@@ -199,6 +214,8 @@ unsigned OptimalBranching::solve() {
     }
   }
 
+  LDBG() << "  OptimalBranching::solve() total cost for root " << root << ": "
+         << totalCost;
   return totalCost;
 }
 
