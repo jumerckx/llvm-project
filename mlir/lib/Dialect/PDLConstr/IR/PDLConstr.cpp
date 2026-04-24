@@ -49,21 +49,6 @@ void PDLConstrDialect::registerTypes() {
 // OptionalType
 //===----------------------------------------------------------------------===//
 
-Type OptionalType::parse(AsmParser &parser) {
-  if (parser.parseLess())
-    return Type();
-
-  Type innerType;
-  if (parser.parseType(innerType) || parser.parseGreater())
-    return Type();
-
-  return OptionalType::get(innerType);
-}
-
-void OptionalType::print(AsmPrinter &printer) const {
-  printer << "<" << getInnerType() << ">";
-}
-
 LogicalResult
 OptionalType::verify(function_ref<InFlightDiagnostic()> emitError,
                      Type innerType) {
