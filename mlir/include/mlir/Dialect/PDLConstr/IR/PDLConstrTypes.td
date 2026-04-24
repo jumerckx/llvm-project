@@ -50,7 +50,7 @@ def PDLConstr_Optional : PDLConstr_Type<"Optional", "optional"> {
     }]>,
   ];
   let genVerifyDecl = 1;
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = "`<` $innerType `>`";
   let skipDefaultBuilders = 1;
 }
 
