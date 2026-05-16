@@ -30,7 +30,7 @@ class PDL_Op<string mnemonic, list<Trait> traits = []>
 //===----------------------------------------------------------------------===//
 
 def PDL_ApplyNativeConstraintOp
-    : PDL_Op<"apply_native_constraint", [HasParent<"pdl::PatternOp">]> {
+    : PDL_Op<"apply_native_constraint", [HasParent<"pdl::PatternOp, pdl_constr::PatternOp">]> {
   let summary = "Apply a native constraint to a set of provided entities";
   let description = [{
     `pdl.apply_native_constraint` operations apply a native C++ constraint, that
@@ -62,7 +62,7 @@ def PDL_ApplyNativeConstraintOp
 //===----------------------------------------------------------------------===//
 
 def PDL_ApplyNativeRewriteOp
-    : PDL_Op<"apply_native_rewrite", [HasParent<"pdl::RewriteOp">]> {
+    : PDL_Op<"apply_native_rewrite", [HasParent<"pdl::RewriteOp, pdl_constr::PatternOp">]> {
   let summary = "Apply a native rewrite method inside of pdl.rewrite region";
   let description = [{
     `pdl.apply_native_rewrite` operations apply a native C++ function, that has
@@ -150,7 +150,7 @@ def PDL_AttributeOp : PDL_Op<"attribute"> {
 // pdl::EraseOp
 //===----------------------------------------------------------------------===//
 
-def PDL_EraseOp : PDL_Op<"erase", [HasParent<"pdl::RewriteOp">]> {
+def PDL_EraseOp : PDL_Op<"erase", [HasParent<"pdl::RewriteOp, pdl_constr::PatternOp">]> {
   let summary = "Mark an input operation as `erased`";
   let description = [{
     `pdl.erase` operations are used within `pdl.rewrite` regions to specify that
@@ -172,7 +172,7 @@ def PDL_EraseOp : PDL_Op<"erase", [HasParent<"pdl::RewriteOp">]> {
 //===----------------------------------------------------------------------===//
 
 def PDL_OperandOp
-    : PDL_Op<"operand", [HasParent<"pdl::PatternOp">]> {
+    : PDL_Op<"operand", [HasParent<"pdl::PatternOp, pdl_constr::PatternOp">]> {
   let summary = "Define an external input operand in a pattern";
   let description = [{
     `pdl.operand` operations capture external operand edges into an operation
@@ -211,7 +211,7 @@ def PDL_OperandOp
 //===----------------------------------------------------------------------===//
 
 def PDL_OperandsOp
-    : PDL_Op<"operands", [HasParent<"pdl::PatternOp">]> {
+    : PDL_Op<"operands", [HasParent<"pdl::PatternOp, pdl_constr::PatternOp">]> {
   let summary = "Define a range of input operands in a pattern";
   let description = [{
     `pdl.operands` operations capture external operand range edges into an
@@ -448,7 +448,7 @@ def PDL_PatternOp : PDL_Op<"pattern", [
 // pdl::RangeOp
 //===----------------------------------------------------------------------===//
 
-def PDL_RangeOp : PDL_Op<"range", [Pure, HasParent<"pdl::RewriteOp">]> {
+def PDL_RangeOp : PDL_Op<"range", [Pure, HasParent<"pdl::RewriteOp, pdl_constr::PatternOp">]> {
   let summary = "Construct a range of pdl entities";
   let description = [{
     `pdl.range` operations construct a range from a given set of PDL entities,
@@ -491,7 +491,7 @@ def PDL_RangeOp : PDL_Op<"range", [Pure, HasParent<"pdl::RewriteOp">]> {
 //===----------------------------------------------------------------------===//
 
 def PDL_ReplaceOp : PDL_Op<"replace", [
-    AttrSizedOperandSegments, HasParent<"pdl::RewriteOp">
+    AttrSizedOperandSegments, HasParent<"pdl::RewriteOp, pdl_constr::PatternOp">
   ]> {
   let summary = "Mark an input operation as `replaced`";
   let description = [{
@@ -607,7 +607,7 @@ def PDL_ResultsOp : PDL_Op<"results", [Pure]> {
 //===----------------------------------------------------------------------===//
 
 def PDL_RewriteOp : PDL_Op<"rewrite", [
-     Terminator, HasParent<"pdl::PatternOp">, NoTerminator, NoRegionArguments,
+     Terminator, HasParent<"pdl::PatternOp, pdl_constr::PatternOp">, NoTerminator, NoRegionArguments,
      SingleBlock, AttrSizedOperandSegments,
      DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>
   ]> {

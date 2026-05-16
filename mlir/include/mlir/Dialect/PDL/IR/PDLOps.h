@@ -20,6 +20,12 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
+namespace mlir {
+namespace pdl_constr {
+class PatternOp;
+} // namespace pdl_constr
+} // namespace mlir
+
 //===----------------------------------------------------------------------===//
 // PDL Dialect Operations
 //===----------------------------------------------------------------------===//
