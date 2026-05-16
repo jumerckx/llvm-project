@@ -15,6 +15,7 @@
 #include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.h"
 #include "mlir/Dialect/PDLConstr/IR/PDLConstrTypes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
@@ -869,7 +870,73 @@ pdl_constr::PatternOp PDLConstrEmitter::emit() {
     allPred = pdl_constr::AllOp::create(builder, loc, predType, preds);
   }
 
-  pdl_constr::SuccessOp::create(builder, loc, allPred);
+  // Phase 4: Clone the rewrite.
+  pdl::RewriteOp rewriteOp = pattern.getRewriter();
+
+  if (rewriteOp.getName()) {
+    // External rewrite: store the name as an attribute on the pattern.
+    constrPattern.setExternalRewriteNameAttr(rewriteOp.getNameAttr());
+
+    // Collect rewrite_values: root (if any) + externalArgs, mapped through
+    // valueMap.
+    SmallVector<Value> rewriteValues;
+    if (Value root = rewriteOp.getRoot()) {
+      Value mapped = valueMap.lookup(root);
+      assert(mapped && "rewrite root not in valueMap");
+      rewriteValues.push_back(mapped);
+    }
+    for (Value arg : rewriteOp.getExternalArgs()) {
+      Value mapped = valueMap.lookup(arg);
+      assert(mapped && "external rewrite arg not in valueMap");
+      rewriteValues.push_back(mapped);
+    }
+
+    pdl_constr::SuccessOp::create(builder, loc, allPred, rewriteValues);
+  } else {
+    // Inline rewrite: clone the rewrite body into the rewrite region.
+    Region &rewriteBody = rewriteOp.getBodyRegion();
+
+    // Collect all PDL values used in the rewrite body that are defined outside
+    // (i.e., in the pattern body). These become the rewrite_values on success
+    // and block arguments on the rewrite region.
+    SmallVector<Value> externalPDLValues;
+    DenseMap<Value, unsigned> externalValueIndex;
+    for (Operation &op : rewriteBody.front()) {
+      for (Value operand : op.getOperands()) {
+        if (operand.getParentRegion() != &rewriteBody &&
+            !externalValueIndex.count(operand)) {
+          externalValueIndex[operand] = externalPDLValues.size();
+          externalPDLValues.push_back(operand);
+        }
+      }
+    }
+
+    // Map external PDL values through valueMap to get pdl_constr values.
+    SmallVector<Value> rewriteValues;
+    for (Value pdlVal : externalPDLValues) {
+      Value mapped = valueMap.lookup(pdlVal);
+      assert(mapped && "rewrite-referenced value not in valueMap");
+      rewriteValues.push_back(mapped);
+    }
+
+    pdl_constr::SuccessOp::create(builder, loc, allPred, rewriteValues);
+
+    // Create the rewrite region with block arguments matching the external
+    // values' original PDL types.
+    Block *rewriteBlock = &constrPattern.getRewriteRegion().emplaceBlock();
+    IRMapping mapping;
+    for (auto [i, pdlVal] : llvm::enumerate(externalPDLValues)) {
+      BlockArgument arg =
+          rewriteBlock->addArgument(pdlVal.getType(), loc);
+      mapping.map(pdlVal, arg);
+    }
+
+    // Clone the rewrite body ops into the rewrite region.
+    OpBuilder::InsertionGuard rewriteGuard(builder);
+    builder.setInsertionPointToStart(rewriteBlock);
+    for (Operation &op : rewriteBody.front())
+      builder.clone(op, mapping);
+  }
 
   return constrPattern;
 }
