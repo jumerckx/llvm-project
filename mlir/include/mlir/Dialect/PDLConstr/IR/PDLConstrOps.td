@@ -27,36 +27,55 @@ class PDLConstr_Op<string mnemonic, list<Trait> traits = []>
 //===----------------------------------------------------------------------===//
 
 def PDLConstr_PatternOp : PDLConstr_Op<"pattern", [
-    IsolatedFromAbove, SingleBlock,
+    IsolatedFromAbove,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>,
     Symbol
   ]> {
-  let summary = "Wraps a single pattern's navigation and constraints";
+  let summary = "Wraps a single pattern's navigation, constraints, and rewrite";
   let description = [{
     `pdl_constr.pattern` wraps a single pattern's navigation and constraints
-    in one op with a single block region. The block argument is the root
-    operation. Terminated by `pdl_constr.success`.
+    in one op with two regions:
+
+    1. **Body region** (single block): Contains navigation and constraint ops.
+       The block argument is the root `!pdl.operation`. Terminated by
+       `pdl_constr.success`.
+
+    2. **Rewrite region** (single block): Contains the rewrite logic from the
+       original `pdl.rewrite`. Block arguments correspond to PDL values from the
+       match side that are needed by the rewrite. These map (by position) to the
+       values listed in the `rewrite_values` attribute on `pdl_constr.success`.
 
     Example:
 
     ```mlir
-    pdl_constr.pattern @name benefit(1) root(%root : !pdl.operation) {
+    pdl_constr.pattern @name : benefit(1) root(%root : !pdl.operation) {
       // ... navigation ops, constraint ops, combinators ...
-      pdl_constr.success %pred
+      pdl_constr.success %pred rewrite_values(%root_val, %result_val)
+    } rewrite(%r : !pdl.operation, %v : !pdl.value) {
+      // ... pdl rewrite ops using %r, %v ...
     }
     ```
   }];
 
   let arguments = (ins ConfinedAttr<I16Attr, [IntNonNegative]>:$benefit,
-                       OptionalAttr<SymbolNameAttr>:$sym_name);
-  let regions = (region SizedRegion<1>:$bodyRegion);
+                       OptionalAttr<SymbolNameAttr>:$sym_name,
+                       OptionalAttr<StrAttr>:$externalRewriteName,
+                       OptionalAttr<TypeArrayAttr>:$externalRewriteArgTypes);
+  let regions = (region SizedRegion<1>:$bodyRegion,
+                        AnyRegion:$rewriteRegion);
 
-  let assemblyFormat = [{
-    ($sym_name^)? `:` `benefit` `(` $benefit `)` `root`
-    custom<PatternRegion>($bodyRegion)
-    attr-dict-with-keyword
-  }];
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins "IntegerAttr":$benefit, "StringAttr":$sym_name)>,
+  ];
+
+  let hasCustomAssemblyFormat = 1;
   let hasRegionVerifier = 1;
+
+  let extraClassDeclaration = [{
+    /// Returns the success terminator of the body region.
+    SuccessOp getSuccessOp();
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -303,8 +322,17 @@ def PDLConstr_AnyOp : PDLConstr_Op<"any", [Pure]> {
 def PDLConstr_SuccessOp : PDLConstr_Op<"success", [Pure, Terminator,
     HasParent<"pdl_constr::PatternOp">]> {
   let summary = "Marks a successful pattern match";
-  let arguments = (ins PDLConstr_PredType:$pred);
-  let assemblyFormat = "$pred attr-dict";
+  let description = [{
+    Marks a successful pattern match. Takes a single `!pdl_constr.pred` operand
+    (typically the output of an `all` combining all constraints) and an optional
+    list of rewrite values that are passed as block arguments to the rewrite
+    region of the parent `pdl_constr.pattern`.
+  }];
+  let arguments = (ins PDLConstr_PredType:$pred,
+                       Variadic<PDL_AnyType>:$rewriteValues);
+  let assemblyFormat = [{
+    $pred (`rewrite_values` `(` $rewriteValues^ `:` type($rewriteValues) `)`)? attr-dict
+  }];
 }
 
 #endif // MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTROPS

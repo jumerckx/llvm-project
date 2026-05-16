@@ -12,6 +12,7 @@
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/SymbolTable.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -66,25 +67,136 @@ OptionalType::verify(function_ref<InFlightDiagnostic()> emitError,
 // PatternOp
 //===----------------------------------------------------------------------===//
 
-/// Custom parser for the pattern region: parses `(%arg : type) { body }`.
-static ParseResult parsePatternRegion(OpAsmParser &parser, Region &region) {
+void PatternOp::build(OpBuilder &builder, OperationState &state,
+                      IntegerAttr benefit, StringAttr symName) {
+  state.addAttribute("benefit", benefit);
+  if (symName)
+    state.addAttribute(SymbolTable::getSymbolAttrName(), symName);
+  state.addRegion(); // bodyRegion
+  state.addRegion(); // rewriteRegion
+}
+
+SuccessOp PatternOp::getSuccessOp() {
+  return cast<SuccessOp>(getBodyRegion().front().getTerminator());
+}
+
+/// Parse: `(%arg : type) { body }`
+static ParseResult parsePatternBodyRegion(OpAsmParser &parser,
+                                          Region &region) {
   OpAsmParser::Argument arg;
   if (parser.parseLParen() || parser.parseArgument(arg, /*allowType=*/true) ||
       parser.parseRParen())
     return failure();
-
   return parser.parseRegion(region, {arg});
 }
 
-/// Custom printer for the pattern region.
-static void printPatternRegion(OpAsmPrinter &p, Operation *op, Region &region) {
+/// Parse: `(%arg0 : type0, %arg1 : type1, ...) { body }`
+/// or an empty rewrite region if not present.
+static ParseResult parseRewriteRegion(OpAsmParser &parser, Region &region) {
+  SmallVector<OpAsmParser::Argument> args;
+  if (parser.parseLParen())
+    return failure();
+  if (parser.parseOptionalRParen()) {
+    // Parse argument list.
+    do {
+      OpAsmParser::Argument arg;
+      if (parser.parseArgument(arg, /*allowType=*/true))
+        return failure();
+      args.push_back(arg);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (parser.parseRParen())
+      return failure();
+  }
+  return parser.parseRegion(region, args);
+}
+
+/// Custom assembly format:
+///   @sym_name? `:` `benefit` `(` $benefit `)` `root` body_region
+///   (`rewrite` rewrite_region)?
+///   (`with` $externalRewriteName
+///     (`(` $externalRewriteArgTypes `)`)? )?
+///   attr-dict-with-keyword
+ParseResult PatternOp::parse(OpAsmParser &parser, OperationState &result) {
+  StringAttr symName;
+  (void)parser.parseOptionalSymbolName(symName, SymbolTable::getSymbolAttrName(),
+                                       result.attributes);
+
+  if (parser.parseColon() || parser.parseKeyword("benefit") ||
+      parser.parseLParen())
+    return failure();
+
+  IntegerAttr benefitAttr;
+  if (parser.parseAttribute(benefitAttr, "benefit", result.attributes))
+    return failure();
+  if (parser.parseRParen() || parser.parseKeyword("root"))
+    return failure();
+
+  // Parse body region.
+  Region *bodyRegion = result.addRegion();
+  if (parsePatternBodyRegion(parser, *bodyRegion))
+    return failure();
+
+  // Parse optional rewrite region.
+  Region *rewriteRegion = result.addRegion();
+  if (succeeded(parser.parseOptionalKeyword("rewrite"))) {
+    if (parseRewriteRegion(parser, *rewriteRegion))
+      return failure();
+  }
+
+  // Parse optional external rewrite.
+  if (succeeded(parser.parseOptionalKeyword("with"))) {
+    StringAttr rewriteName;
+    if (parser.parseAttribute(rewriteName, "externalRewriteName",
+                              result.attributes))
+      return failure();
+  }
+
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  return success();
+}
+
+void PatternOp::print(OpAsmPrinter &p) {
+  if (auto sym = getSymNameAttr()) {
+    p << ' ';
+    p.printSymbolName(sym);
+  }
+  p << " : benefit(" << getBenefit() << ") root";
+
+  // Print body region.
+  Region &body = getBodyRegion();
   p << "(";
-  if (!region.empty() && region.front().getNumArguments() > 0) {
-    BlockArgument arg = region.front().getArgument(0);
+  if (!body.empty() && body.front().getNumArguments() > 0) {
+    BlockArgument arg = body.front().getArgument(0);
     p.printRegionArgument(arg);
   }
   p << ") ";
-  p.printRegion(region, /*printEntryBlockArgs=*/false);
+  p.printRegion(body, /*printEntryBlockArgs=*/false);
+
+  // Print rewrite region if non-empty.
+  Region &rewrite = getRewriteRegion();
+  if (!rewrite.empty()) {
+    p << " rewrite(";
+    Block &rewriteBlock = rewrite.front();
+    llvm::interleaveComma(rewriteBlock.getArguments(), p,
+                          [&](BlockArgument arg) {
+                            p.printRegionArgument(arg);
+                          });
+    p << ") ";
+    p.printRegion(rewrite, /*printEntryBlockArgs=*/false);
+  }
+
+  // Print external rewrite name.
+  if (auto name = getExternalRewriteNameAttr()) {
+    p << " with ";
+    p.printAttribute(name);
+  }
+
+  p.printOptionalAttrDictWithKeyword(
+      (*this)->getAttrs(),
+      /*elidedAttrs=*/{"benefit", "sym_name", "externalRewriteName",
+                       "externalRewriteArgTypes"});
 }
 
 LogicalResult PatternOp::verifyRegions() {
@@ -105,6 +217,26 @@ LogicalResult PatternOp::verifyRegions() {
   // Verify the block is terminated by pdl_constr.success.
   if (block.empty() || !llvm::isa<SuccessOp>(block.back()))
     return emitOpError("expected body to terminate with `pdl_constr.success`");
+
+  // Verify rewrite region if present.
+  Region &rewrite = getRewriteRegion();
+  if (!rewrite.empty()) {
+    // The rewrite region must have a single block.
+    if (!rewrite.hasOneBlock())
+      return emitOpError("expected rewrite region to have a single block");
+
+    // Verify that the number of rewrite_values on the success op matches the
+    // number of rewrite region block arguments.
+    auto successOp = getSuccessOp();
+    unsigned numRewriteValues = successOp.getRewriteValues().size();
+    unsigned numRewriteArgs = rewrite.front().getNumArguments();
+    if (numRewriteValues != numRewriteArgs)
+      return emitOpError("expected ")
+             << numRewriteArgs
+             << " rewrite_values on success op to match rewrite region block "
+                "arguments, but got "
+             << numRewriteValues;
+  }
 
   return success();
 }
