@@ -11,5 +11,7 @@ add_mlir_conversion_library(MLIRPDLToPDLConstr
   MLIRIR
   MLIRPDLDialect
   MLIRPDLConstrDialect
+  MLIRPDLInterpDialect
+  MLIRPDLToPDLInterp
   MLIRPass
   )
