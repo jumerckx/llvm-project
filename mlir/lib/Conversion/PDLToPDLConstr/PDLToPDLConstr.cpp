@@ -8,13 +8,16 @@
 
 #include "mlir/Conversion/PDLToPDLConstr/PDLToPDLConstr.h"
 
+#include "mlir/Conversion/PDLToPDLInterp/RewriterGen.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDL/IR/PDLOps.h"
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/Dialect/PDLConstr/IR/PDLConstr.h"
 #include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.h"
 #include "mlir/Dialect/PDLConstr/IR/PDLConstrTypes.h"
+#include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
@@ -246,11 +249,15 @@ namespace {
 /// Emits pdl_constr ops for a single pdl::PatternOp.
 class PDLConstrEmitter {
 public:
-  PDLConstrEmitter(OpBuilder &builder, pdl::PatternOp pattern)
+  PDLConstrEmitter(OpBuilder &builder, pdl::PatternOp pattern,
+                   ModuleOp rewriterModule,
+                   SymbolTable &rewriterSymbolTable)
       : builder(builder), pattern(pattern),
         ctx(pattern.getContext()),
         loc(pattern.getLoc()),
-        predType(builder.getType<pdl_constr::PredType>()) {}
+        predType(builder.getType<pdl_constr::PredType>()),
+        rewriterModule(rewriterModule),
+        rewriterSymbolTable(rewriterSymbolTable) {}
 
   /// Emit a pdl_constr.pattern for the given pdl.pattern.
   pdl_constr::PatternOp emit();
@@ -295,6 +302,11 @@ private:
   MLIRContext *ctx;
   Location loc;
   pdl_constr::PredType predType;
+
+  /// The nested module that holds the lowered rewriter functions and the
+  /// symbol table used to insert into it.
+  ModuleOp rewriterModule;
+  SymbolTable &rewriterSymbolTable;
 
   /// Mapping from pdl SSA values to their pdl_constr SSA values.
   DenseMap<Value, Value> valueMap;
@@ -869,27 +881,26 @@ pdl_constr::PatternOp PDLConstrEmitter::emit() {
     allPred = pdl_constr::AllOp::create(builder, loc, predType, preds);
   }
 
-  // The rewriter symbol mirrors the convention used by `pdl_interp.record_match`:
-  // if the source pattern has a symbolic name, reuse it; otherwise fall back to
-  // a generic generated rewriter name. The `pdl_constr → pdl_interp` lowering
-  // pass is responsible for emitting the actual rewriter function under this
-  // name and forwarding it (along with the inputs below) to
-  // `pdl_interp.record_match`.
-  StringRef rewriterName = "pdl_generated_rewriter";
-  if (auto symName = pattern.getSymName())
-    rewriterName = *symName;
-  SymbolRefAttr rewriterRef =
-      SymbolRefAttr::get(builder.getContext(), "rewriters",
-                         {SymbolRefAttr::get(builder.getContext(),
-                                             rewriterName)});
+  // Lower the pattern's rewrite region into a pdl_interp.func in the rewriter
+  // module, reusing the shared rewriter generator. This mirrors what the
+  // pdl-to-pdl_interp pass would emit, so the success op can reference it
+  // directly with the correct arguments.
+  SmallVector<Value, 8> usedMatchValues;
+  SymbolRefAttr rewriterRef = pdl_to_pdl_interp::generatePatternRewriter(
+      pattern, rewriterModule, rewriterSymbolTable, builder, usedMatchValues);
 
-  // For now, no match values are propagated as rewriter arguments at this
-  // level — the `pdl_constr → pdl_interp` lowering will compute the actual
-  // set of values used by the rewriter when it generates the rewriter body.
-  // The op's variadic `inputs` is left empty here so that downstream passes
-  // can populate it once that analysis runs.
+  // Translate the pdl values used by the rewriter (from the match region)
+  // into the corresponding pdl_constr SSA values.
+  SmallVector<Value, 8> mappedInputs;
+  mappedInputs.reserve(usedMatchValues.size());
+  for (Value matchValue : usedMatchValues) {
+    Value mapped = valueMap.lookup(matchValue);
+    assert(mapped && "rewriter uses a match value not produced by the pattern");
+    mappedInputs.push_back(mapped);
+  }
+
   pdl_constr::SuccessOp::create(builder, loc, allPred, rewriterRef,
-                                /*inputs=*/ValueRange{});
+                                mappedInputs);
 
   return constrPattern;
 }
@@ -909,10 +920,21 @@ void PDLToPDLConstrPass::runOnOperation() {
   ModuleOp module = getOperation();
   OpBuilder builder(module.getContext());
 
+  // Create a nested module to hold the rewriter functions invoked after a
+  // successful match. The same naming convention as the pdl_interp pipeline
+  // is used so that downstream consumers (and the eventual `pdl_constr ->
+  // pdl_interp` lowering) can find them under `@rewriters::@<pattern>`.
+  builder.setInsertionPointToStart(module.getBody());
+  ModuleOp rewriterModule =
+      ModuleOp::create(builder, module.getLoc(),
+                       pdl_interp::PDLInterpDialect::getRewriterModuleName());
+  SymbolTable rewriterSymbolTable(rewriterModule);
+
   for (pdl::PatternOp pattern :
        llvm::make_early_inc_range(module.getOps<pdl::PatternOp>())) {
     builder.setInsertionPoint(pattern);
-    PDLConstrEmitter emitter(builder, pattern);
+    PDLConstrEmitter emitter(builder, pattern, rewriterModule,
+                             rewriterSymbolTable);
     emitter.emit();
     pattern.erase();
   }
