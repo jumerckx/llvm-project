@@ -146,6 +146,22 @@ LogicalResult IsNotNullOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// SuccessOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+SuccessOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  // The rewriter symbol must resolve to some symbol op. We don't constrain it
+  // to a specific op kind here, mirroring `pdl_interp.record_match` which also
+  // references an arbitrary symbol (typically a `pdl_interp.func` in a
+  // rewriter module).
+  if (!symbolTable.lookupNearestSymbolFrom(*this, getRewriterAttr()))
+    return emitOpError("references an unknown rewriter symbol: ")
+           << getRewriterAttr();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen'd op method definitions
 //===----------------------------------------------------------------------===//
 

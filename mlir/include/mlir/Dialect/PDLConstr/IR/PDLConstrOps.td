@@ -300,11 +300,35 @@ def PDLConstr_AnyOp : PDLConstr_Op<"any", [Pure]> {
 // Terminator
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_SuccessOp : PDLConstr_Op<"success", [Pure, Terminator,
+def PDLConstr_SuccessOp : PDLConstr_Op<"success", [Terminator,
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>,
     HasParent<"pdl_constr::PatternOp">]> {
   let summary = "Marks a successful pattern match";
-  let arguments = (ins PDLConstr_PredType:$pred);
-  let assemblyFormat = "$pred attr-dict";
+  let description = [{
+    `pdl_constr.success` marks a successful pattern match and identifies the
+    rewriter to invoke. The op takes a single `!pdl_constr.pred` operand
+    (typically the result of `pdl_constr.all` combining all constraints), a
+    symbol reference to the rewriter to invoke, and the values from the match
+    that should be propagated to the rewriter as arguments.
+
+    The signature mirrors `pdl_interp.record_match` so that the rewriter
+    metadata is preserved through the `pdl_constr` level. The lowering to
+    `pdl_interp` forwards the symbol and inputs directly to the
+    `pdl_interp.record_match` op that it generates.
+
+    Example:
+
+    ```mlir
+    pdl_constr.success %pred, @rewriters::@rewriter(%root, %lhs : !pdl.operation, !pdl.value)
+    ```
+  }];
+
+  let arguments = (ins PDLConstr_PredType:$pred,
+                       SymbolRefAttr:$rewriter,
+                       Variadic<PDL_AnyType>:$inputs);
+  let assemblyFormat = [{
+    $pred `,` $rewriter (`(` $inputs^ `:` type($inputs) `)`)? attr-dict
+  }];
 }
 
 #endif // MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTROPS

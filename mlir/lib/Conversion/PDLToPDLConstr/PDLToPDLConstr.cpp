@@ -869,7 +869,27 @@ pdl_constr::PatternOp PDLConstrEmitter::emit() {
     allPred = pdl_constr::AllOp::create(builder, loc, predType, preds);
   }
 
-  pdl_constr::SuccessOp::create(builder, loc, allPred);
+  // The rewriter symbol mirrors the convention used by `pdl_interp.record_match`:
+  // if the source pattern has a symbolic name, reuse it; otherwise fall back to
+  // a generic generated rewriter name. The `pdl_constr → pdl_interp` lowering
+  // pass is responsible for emitting the actual rewriter function under this
+  // name and forwarding it (along with the inputs below) to
+  // `pdl_interp.record_match`.
+  StringRef rewriterName = "pdl_generated_rewriter";
+  if (auto symName = pattern.getSymName())
+    rewriterName = *symName;
+  SymbolRefAttr rewriterRef =
+      SymbolRefAttr::get(builder.getContext(), "rewriters",
+                         {SymbolRefAttr::get(builder.getContext(),
+                                             rewriterName)});
+
+  // For now, no match values are propagated as rewriter arguments at this
+  // level — the `pdl_constr → pdl_interp` lowering will compute the actual
+  // set of values used by the rewriter when it generates the rewriter body.
+  // The op's variadic `inputs` is left empty here so that downstream passes
+  // can populate it once that analysis runs.
+  pdl_constr::SuccessOp::create(builder, loc, allPred, rewriterRef,
+                                /*inputs=*/ValueRange{});
 
   return constrPattern;
 }
