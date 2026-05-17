@@ -9,6 +9,6 @@ add_mlir_dialect_library(MLIRPDLConstrDialect
 
   LINK_LIBS PUBLIC
   MLIRIR
-  MLIRPDLDialect
+  MLIRPDLTypes
   MLIRSideEffectInterfaces
   )
