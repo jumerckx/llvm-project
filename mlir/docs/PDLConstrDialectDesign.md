@@ -214,11 +214,27 @@ Logical OR over predicate values. Returns `!pdl_constr.pred`.
 #### `pdl_constr.success`
 
 Marks a successful pattern match. Takes a single `!pdl_constr.pred` operand
-(typically the output of an `all` combining all constraints).
+(typically the output of an `all` combining all constraints), a symbol
+reference to a rewriter function, and a variadic list of input values from the
+match region that must be forwarded to the rewriter.
 
 ```mlir
-pdl_constr.success %pred
+pdl_constr.success %pred, @rewriters::@my_rewriter(%v0, %v1 : !pdl.value, !pdl.operation)
 ```
+
+The `rewriter` symbol refers to a `pdl_interp.func` inside a `rewriters` module
+(the same rewriter module produced by the `pdl → pdl_interp` pipeline). The
+rewrite region of the original `pdl.pattern` is lowered eagerly by the
+`pdl → pdl_constr` pass using the shared `pdl_to_pdl_interp::generatePatternRewriter`
+utility (see `mlir/include/mlir/Conversion/PDLToPDLInterp/RewriterGen.h`), which
+emits the `pdl_interp.func` and reports the set of "used match values" — PDL
+values defined in the match region that the rewriter consumes. Those values are
+mapped back to their corresponding `pdl_constr` SSA values and become the
+`inputs` operands of `pdl_constr.success`, mirroring the `inputs` operand list
+of `pdl_interp.record_match`. This guarantees that the rewriter metadata is
+preserved unchanged through the subsequent `pdl_constr → pdl_interp` lowering,
+which simply lowers `pdl_constr.success` into a `pdl_interp.record_match`
+referencing the same symbol and forwarding the same inputs.
 
 ---
 
