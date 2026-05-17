@@ -60,6 +60,7 @@
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/OpenACCToSCF/ConvertOpenACCToSCF.h"
 #include "mlir/Conversion/OpenMPToLLVM/ConvertOpenMPToLLVM.h"
+#include "mlir/Conversion/PDLConstrToPDLInterp/PDLConstrToPDLInterp.h"
 #include "mlir/Conversion/PDLToPDLConstr/PDLToPDLConstr.h"
 #include "mlir/Conversion/PDLToPDLInterp/PDLToPDLInterp.h"
 #include "mlir/Conversion/RaiseWasm/RaiseWasmMLIR.h"
