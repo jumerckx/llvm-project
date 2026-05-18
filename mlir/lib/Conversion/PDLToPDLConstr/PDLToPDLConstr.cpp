@@ -349,10 +349,11 @@ void PDLConstrEmitter::emitTypeConstraints(Value pdlVal, Value constrVal) {
       preds.push_back(pred);
     }
   } else if (auto typesOp = pdlVal.getDefiningOp<pdl::TypesOp>()) {
-    // TypesOp constraints are handled via HasTypeOp with ArrayAttr - but
-    // the pdl_constr.has_type takes a TypeAttr, so for now types ranges
-    // with constant constraints are not fully handled here. The type check
-    // for ranges would need extension. For now, skip.
+    if (Attribute types = typesOp.getConstantTypesAttr()) {
+      auto pred = pdl_constr::HasTypesOp::create(
+          builder, loc, predType, constrVal, cast<ArrayAttr>(types));
+      preds.push_back(pred);
+    }
   }
 }
 
@@ -378,9 +379,12 @@ void PDLConstrEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
   TypeSwitch<Operation *>(pdlVal.getDefiningOp())
       .Case<pdl::OperandOp, pdl::OperandsOp>([&](auto op) {
         if (Value type = op.getValueType()) {
-          Value typeVal =
-              pdl_constr::GetValueTypeOp::create(builder, loc,
-                  builder.getType<pdl::TypeType>(), constrVal);
+          Type typeResultType =
+              isa<pdl::RangeType>(constrVal.getType())
+                  ? (Type)pdl::RangeType::get(builder.getType<pdl::TypeType>())
+                  : (Type)builder.getType<pdl::TypeType>();
+          Value typeVal = pdl_constr::GetValueTypeOp::create(
+              builder, loc, typeResultType, constrVal);
           Value existing = getOrRegister(type, typeVal);
           if (!existing)
             emitTypeConstraints(type, typeVal);
@@ -557,9 +561,10 @@ void PDLConstrEmitter::emitOperationConstraints(
         /*index=*/IntegerAttr());
     Value resVal = resOpt.getResult();
 
-    auto typeVal =
-        pdl_constr::GetValueTypeOp::create(builder, loc,
-            builder.getType<pdl::TypeType>(), resVal);
+    Type rangeTypeType =
+        pdl::RangeType::get(builder.getType<pdl::TypeType>());
+    auto typeVal = pdl_constr::GetValueTypeOp::create(
+        builder, loc, rangeTypeType, resVal);
 
     Value existing = getOrRegister(types[0], typeVal);
     if (!existing)
@@ -592,9 +597,12 @@ void PDLConstrEmitter::emitOperationConstraints(
     }
 
     // Get the type of this result.
-    auto typeVal =
-        pdl_constr::GetValueTypeOp::create(builder, loc,
-            builder.getType<pdl::TypeType>(), resultVal);
+    Type typeResultType =
+        isa<pdl::RangeType>(resultVal.getType())
+            ? (Type)pdl::RangeType::get(builder.getType<pdl::TypeType>())
+            : (Type)builder.getType<pdl::TypeType>();
+    auto typeVal = pdl_constr::GetValueTypeOp::create(
+        builder, loc, typeResultType, resultVal);
 
     Value existing = getOrRegister(typeValue, typeVal);
     if (!existing)
