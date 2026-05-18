@@ -1127,7 +1127,7 @@ def ConvertOpenMPToLLVMPass : Pass<"convert-openmp-to-llvm", "ModuleOp"> {
 
 def ConvertPDLToPDLConstrPass : Pass<"convert-pdl-to-pdl-constr", "ModuleOp"> {
   let summary = "Convert PDL ops to PDL constraint ops";
-  let dependentDialects = ["pdl_constr::PDLConstrDialect"];
+  let dependentDialects = ["pdl_constr::PDLConstrDialect", "pdl::PDLDialect", "pdl_interp::PDLInterpDialect"];
 }
 
 def ConvertPDLToPDLInterpPass : Pass<"convert-pdl-to-pdl-interp", "ModuleOp"> {
