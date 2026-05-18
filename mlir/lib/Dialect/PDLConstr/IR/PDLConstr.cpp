@@ -102,9 +102,11 @@ LogicalResult PatternOp::verifyRegions() {
     return emitOpError(
         "expected body block argument to be of type !pdl.operation");
 
-  // Verify the block is terminated by pdl_constr.success.
-  if (block.empty() || !llvm::isa<SuccessOp>(block.back()))
-    return emitOpError("expected body to terminate with `pdl_constr.success`");
+  // Verify the body contains at least one `pdl_constr.success` op. Multiple
+  // success ops are permitted to support combined patterns.
+  if (block.getOps<SuccessOp>().empty())
+    return emitOpError("expected body to contain at least one "
+                       "`pdl_constr.success`");
 
   return success();
 }

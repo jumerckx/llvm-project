@@ -27,22 +27,34 @@ class PDLConstr_Op<string mnemonic, list<Trait> traits = []>
 //===----------------------------------------------------------------------===//
 
 def PDLConstr_PatternOp : PDLConstr_Op<"pattern", [
-    IsolatedFromAbove, SingleBlock,
+    IsolatedFromAbove, SingleBlock, NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>,
     Symbol
   ]> {
-  let summary = "Wraps a single pattern's navigation and constraints";
+  let summary = "Wraps one or more patterns' navigation and constraints";
   let description = [{
-    `pdl_constr.pattern` wraps a single pattern's navigation and constraints
-    in one op with a single block region. The block argument is the root
-    operation. Terminated by `pdl_constr.success`.
+    `pdl_constr.pattern` wraps the navigation and constraint ops shared by one
+    or more sub-patterns in a single block region. The block argument is the
+    root operation. Each successful sub-pattern match is marked by a
+    `pdl_constr.success` op; a `pdl_constr.pattern` may contain multiple such
+    ops once independent patterns have been combined.
 
-    Example:
+    Example with a single sub-pattern:
 
     ```mlir
     pdl_constr.pattern @name benefit(1) root(%root : !pdl.operation) {
       // ... navigation ops, constraint ops, combinators ...
-      pdl_constr.success %pred
+      pdl_constr.success %pred, @rewriters::@my_rewriter
+    }
+    ```
+
+    Example with two sub-patterns combined into one:
+
+    ```mlir
+    pdl_constr.pattern @combined benefit(1) root(%root : !pdl.operation) {
+      // ... shared navigation / constraint ops ...
+      pdl_constr.success %predA, @rewriters::@rewrite_a
+      pdl_constr.success %predB, @rewriters::@rewrite_b
     }
     ```
   }];
@@ -300,7 +312,7 @@ def PDLConstr_AnyOp : PDLConstr_Op<"any", [Pure]> {
 // Terminator
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_SuccessOp : PDLConstr_Op<"success", [Terminator,
+def PDLConstr_SuccessOp : PDLConstr_Op<"success", [
     DeclareOpInterfaceMethods<SymbolUserOpInterface>,
     HasParent<"pdl_constr::PatternOp">]> {
   let summary = "Marks a successful pattern match";
