@@ -116,6 +116,19 @@ StringRef PatternOp::getDefaultDialect() {
 }
 
 //===----------------------------------------------------------------------===//
+// GetValueTypeOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult GetValueTypeOp::verify() {
+  bool valueIsRange = llvm::isa<pdl::RangeType>(getValue().getType());
+  bool resultIsRange = llvm::isa<pdl::RangeType>(getResult().getType());
+  if (valueIsRange != resultIsRange)
+    return emitOpError(
+        "expected result to be a range iff the value is a range");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // GetEachOp
 //===----------------------------------------------------------------------===//
 

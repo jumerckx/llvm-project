@@ -157,14 +157,17 @@ def PDLConstr_GetDefiningOpOp : PDLConstr_Op<"get_defining_op", [Pure]> {
 //===----------------------------------------------------------------------===//
 
 def PDLConstr_GetValueTypeOp : PDLConstr_Op<"get_value_type", [Pure]> {
-  let summary = "Get the type of a value (non-nullable)";
+  let summary = "Get the type of a value or value range (non-nullable)";
   let description = [{
-    Gets the type of a value. Always succeeds because the input value
-    has already been null-checked.
+    Gets the type of a value (or the types of a value range). Always succeeds
+    because the input value has already been null-checked. If the input is a
+    `!pdl.range<value>`, the result is a `!pdl.range<type>`.
   }];
-  let arguments = (ins PDL_Value:$value);
-  let results = (outs PDL_Type:$result);
-  let assemblyFormat = "`of` $value attr-dict `:` type($result)";
+  let arguments = (ins PDL_InstOrRangeOf<PDL_Value>:$value);
+  let results = (outs PDL_InstOrRangeOf<PDL_Type>:$result);
+  let assemblyFormat =
+      "`of` $value `:` type($value) attr-dict `:` type($result)";
+  let hasVerifier = 1;
 }
 
 def PDLConstr_GetAttributeTypeOp : PDLConstr_Op<"get_attribute_type", [Pure]> {
@@ -251,6 +254,17 @@ def PDLConstr_HasTypeOp : PDLConstr_Op<"has_type", [Pure]> {
   let arguments = (ins PDL_Type:$type, TypeAttr:$constantType);
   let results = (outs PDLConstr_PredType:$pred);
   let assemblyFormat = "$type `,` $constantType attr-dict";
+}
+
+def PDLConstr_HasTypesOp : PDLConstr_Op<"has_types", [Pure]> {
+  let summary = "Check that a range of types matches a constant array of types";
+  let description = [{
+    Checks that a `!pdl.range<type>` matches a statically known array of types.
+  }];
+  let arguments = (ins PDL_RangeOf<PDL_Type>:$types,
+                       TypeArrayAttr:$constantTypes);
+  let results = (outs PDLConstr_PredType:$pred);
+  let assemblyFormat = "$types `,` $constantTypes attr-dict";
 }
 
 def PDLConstr_HasAttrValueOp : PDLConstr_Op<"has_attr_value", [Pure]> {

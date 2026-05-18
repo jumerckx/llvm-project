@@ -151,6 +151,7 @@ private:
   void handleHasName(pdl_constr::HasNameOp op);
   void handleEqual(pdl_constr::EqualOp op);
   void handleHasType(pdl_constr::HasTypeOp op);
+  void handleHasTypes(pdl_constr::HasTypesOp op);
   void handleHasAttrValue(pdl_constr::HasAttrValueOp op);
   void handleCheckOperandCount(pdl_constr::CheckOperandCountOp op);
   void handleCheckResultCount(pdl_constr::CheckResultCountOp op);
@@ -318,6 +319,13 @@ void PredicateExtractor::handleHasType(pdl_constr::HasTypeOp op) {
       typePos, builder.getTypeConstraint(op.getConstantTypeAttr()));
 }
 
+void PredicateExtractor::handleHasTypes(pdl_constr::HasTypesOp op) {
+  Position *typePos = lookupPosition(op.getTypes());
+  assert(typePos && "type range must already be positioned");
+  info.predicates.emplace_back(
+      typePos, builder.getTypeConstraint(op.getConstantTypesAttr()));
+}
+
 void PredicateExtractor::handleHasAttrValue(pdl_constr::HasAttrValueOp op) {
   Position *attrPos = lookupPosition(op.getAttribute());
   assert(attrPos && "attribute must already be positioned");
@@ -422,6 +430,7 @@ LogicalResult PredicateExtractor::extract() {
         .Case<pdl_constr::HasNameOp>([&](auto o) { handleHasName(o); })
         .Case<pdl_constr::EqualOp>([&](auto o) { handleEqual(o); })
         .Case<pdl_constr::HasTypeOp>([&](auto o) { handleHasType(o); })
+        .Case<pdl_constr::HasTypesOp>([&](auto o) { handleHasTypes(o); })
         .Case<pdl_constr::HasAttrValueOp>(
             [&](auto o) { handleHasAttrValue(o); })
         .Case<pdl_constr::CheckOperandCountOp>(
