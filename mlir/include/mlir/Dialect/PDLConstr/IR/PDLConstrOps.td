@@ -68,6 +68,14 @@ def PDLConstr_PatternOp : PDLConstr_Op<"pattern", [
     custom<PatternRegion>($bodyRegion)
     attr-dict-with-keyword
   }];
+  let extraClassDeclaration = [{
+    //===------------------------------------------------------------------===//
+    // SymbolOpInterface Methods
+    //===------------------------------------------------------------------===//
+
+    /// A PatternOp may optionally define a symbol.
+    bool isOptionalSymbol() { return true; }
+  }];
   let hasRegionVerifier = 1;
 }
 
