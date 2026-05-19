@@ -141,15 +141,17 @@ def PDLConstr_GetAttributeOp : PDLConstr_Op<"get_attribute", [Pure]> {
 }
 
 def PDLConstr_GetDefiningOpOp : PDLConstr_Op<"get_defining_op", [Pure]> {
-  let summary = "Get the defining operation of a value (nullable)";
+  let summary = "Get the defining operation of a value or value range (nullable)";
   let description = [{
-    Navigates to the defining operation of a value. Returns
+    Navigates to the defining operation of a value. If the input is a
+    `!pdl.range<value>`, the defining op of the first value is used. Returns
     `!pdl_constr.optional<!pdl.operation>` because the value may be a block
     argument with no defining op.
   }];
-  let arguments = (ins PDL_Value:$value);
+  let arguments = (ins PDL_InstOrRangeOf<PDL_Value>:$value);
   let results = (outs PDLConstr_OptionalType:$result);
-  let assemblyFormat = "`of` $value attr-dict `:` type($result)";
+  let assemblyFormat =
+      "`of` $value `:` type($value) attr-dict `->` type($result)";
 }
 
 //===----------------------------------------------------------------------===//
