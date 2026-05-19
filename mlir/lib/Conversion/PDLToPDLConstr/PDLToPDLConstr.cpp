@@ -9,6 +9,7 @@
 #include "mlir/Conversion/PDLToPDLConstr/PDLToPDLConstr.h"
 
 #include "mlir/Conversion/PDLToPDLInterp/RewriterGen.h"
+#include "mlir/Conversion/PDLToPDLInterp/RootOrdering.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDL/IR/PDLOps.h"
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
@@ -50,15 +51,11 @@ struct OpIndex {
 /// The parent and operand index of each operation for each root.
 using ParentMaps = DenseMap<Value, DenseMap<Value, OpIndex>>;
 
-/// Entry for root ordering cost graph.
-struct RootOrderingEntry {
-  std::pair<unsigned, unsigned> cost;
-  Value connector;
-};
-
-using RootOrderingGraph = DenseMap<Value, DenseMap<Value, RootOrderingEntry>>;
-
 } // namespace
+
+using pdl_to_pdl_interp::OptimalBranching;
+using pdl_to_pdl_interp::RootOrderingEntry;
+using pdl_to_pdl_interp::RootOrderingGraph;
 
 /// Returns the number of non-range elements within `values`.
 static unsigned getNumNonRangeValues(ValueRange values) {
@@ -163,82 +160,6 @@ static void buildCostGraph(ArrayRef<Value> roots, RootOrderingGraph &graph,
     }
   }
 }
-
-//===----------------------------------------------------------------------===//
-// Minimal Edmonds' algorithm for optimal root ordering
-//===----------------------------------------------------------------------===//
-
-namespace {
-class OptimalBranching {
-public:
-  using EdgeList = std::vector<std::pair<Value, Value>>;
-
-  OptimalBranching(RootOrderingGraph graph, Value root)
-      : graph(std::move(graph)), root(root) {}
-
-  unsigned solve() {
-    // For each non-root node, pick the cheapest incoming edge.
-    unsigned totalCost = 0;
-    for (auto &[target, sources] : graph) {
-      if (target == root)
-        continue;
-      Value bestSource;
-      std::pair<unsigned, unsigned> bestCost = {UINT_MAX, UINT_MAX};
-      for (auto &[source, entry] : sources) {
-        if (entry.cost < bestCost) {
-          bestCost = entry.cost;
-          bestSource = source;
-        }
-      }
-      if (bestSource) {
-        parents[target] = bestSource;
-        totalCost += bestCost.first;
-      }
-    }
-    return totalCost;
-  }
-
-  const DenseMap<Value, Value> &getRootOrderingParents() const {
-    return parents;
-  }
-
-  EdgeList preOrderTraversal(ArrayRef<Value> nodes) const {
-    EdgeList result;
-    // Build children map from parents.
-    DenseMap<Value, SmallVector<Value>> children;
-    for (auto &[child, parent] : parents)
-      children[parent].push_back(child);
-
-    // BFS from root.
-    SmallVector<Value> worklist = {root};
-    DenseSet<Value> visited;
-    while (!worklist.empty()) {
-      Value current = worklist.pop_back_val();
-      if (!visited.insert(current).second)
-        continue;
-      Value parent;
-      auto it = parents.find(current);
-      if (it != parents.end())
-        parent = it->second;
-      result.push_back({current, parent});
-      // Add children in order of `nodes` for determinism.
-      for (Value node : nodes) {
-        if (auto childIt = children.find(current);
-            childIt != children.end() &&
-            llvm::is_contained(childIt->second, node)) {
-          worklist.push_back(node);
-        }
-      }
-    }
-    return result;
-  }
-
-private:
-  RootOrderingGraph graph;
-  Value root;
-  DenseMap<Value, Value> parents;
-};
-} // namespace
 
 //===----------------------------------------------------------------------===//
 // PDL → pdl_constr Emitter
@@ -419,10 +340,7 @@ void PDLConstrEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
               builder, loc, pdl_constr::OptionalType::get(innerType), defOp,
               index ? builder.getI32IntegerAttr(*index)
                     : IntegerAttr());
-          if (index)
-            resultVal = emitNavAndUnwrap(resOpt, innerType);
-          else
-            resultVal = resOpt.getResult();
+          resultVal = emitNavAndUnwrap(resOpt, innerType);
         }
         // Equality constraint: result == operand.
         auto eqPred =
@@ -508,8 +426,10 @@ void PDLConstrEmitter::emitOperationConstraints(
     auto opsOpt = pdl_constr::GetOperandsOp::create(
         builder, loc, pdl_constr::OptionalType::get(rangeValType), opVal,
         /*index=*/IntegerAttr());
-    // All-operands group: don't null-check, just use directly.
-    Value opsVal = opsOpt.getResult();
+    // Unwrap to a `range<value>`. The all-operands group can never be null,
+    // but downstream ops (e.g. GetDefiningOp, GetValueType) expect bare PDL
+    // types, so we still unwrap (the null check will be redundant but cheap).
+    Value opsVal = emitNavAndUnwrap(opsOpt, rangeValType);
 
     Value existing = getOrRegister(operands[0], opsVal);
     if (!existing)
@@ -559,7 +479,7 @@ void PDLConstrEmitter::emitOperationConstraints(
     auto resOpt = pdl_constr::GetResultsOp::create(
         builder, loc, pdl_constr::OptionalType::get(rangeValType), opVal,
         /*index=*/IntegerAttr());
-    Value resVal = resOpt.getResult();
+    Value resVal = emitNavAndUnwrap(resOpt, rangeValType);
 
     Type rangeTypeType =
         pdl::RangeType::get(builder.getType<pdl::TypeType>());
@@ -615,10 +535,17 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
   Value value = opIndex.parent;
   TypeSwitch<Operation *>(value.getDefiningOp())
       .Case([&](pdl::OperationOp operationOp) {
+        // `get_users` requires a single `!pdl.value`. If `pos` is a range,
+        // extract a representative element first.
+        Value userPos = pos;
+        if (isa<pdl::RangeType>(pos.getType()))
+          userPos = pdl_interp::ExtractOp::create(builder, loc, pos, 0);
+
         // Get users and iterate.
         auto usersVal = pdl_constr::GetUsersOp::create(
             builder, loc,
-            pdl::RangeType::get(builder.getType<pdl::OperationType>()), pos);
+            pdl::RangeType::get(builder.getType<pdl::OperationType>()),
+            userPos);
         auto eachVal = pdl_constr::GetEachOp::create(
             builder, loc, builder.getType<pdl::OperationType>(), usersVal);
         Value opVal = eachVal.getResult();
@@ -632,7 +559,7 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
           auto opsOpt = pdl_constr::GetOperandsOp::create(
               builder, loc, pdl_constr::OptionalType::get(rangeValType), opVal,
               /*index=*/IntegerAttr());
-          operandVal = opsOpt.getResult();
+          operandVal = emitNavAndUnwrap(opsOpt, rangeValType);
         } else if (useOperandGroup(operationOp, *opIndex.index)) {
           Type type =
               operationOp.getOperandValues()[*opIndex.index].getType();
@@ -695,7 +622,7 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
           auto resOpt = pdl_constr::GetResultsOp::create(
               builder, loc, pdl_constr::OptionalType::get(innerType), pos,
               /*index=*/IntegerAttr());
-          pos = resOpt.getResult();
+          pos = emitNavAndUnwrap(resOpt, innerType);
         }
         valueMap.try_emplace(value, pos);
       });
@@ -785,11 +712,7 @@ void PDLConstrEmitter::emitNonTreePredicates() {
           auto resOpt = pdl_constr::GetResultsOp::create(
               builder, loc, pdl_constr::OptionalType::get(innerType), parentVal,
               index ? builder.getI32IntegerAttr(*index) : IntegerAttr());
-          Value resultVal;
-          if (index)
-            resultVal = emitNavAndUnwrap(resOpt, innerType);
-          else
-            resultVal = resOpt.getResult();
+          Value resultVal = emitNavAndUnwrap(resOpt, innerType);
           valueMap[resultOp] = resultVal;
         })
         .Case([&](pdl::TypeOp typeOp) {
