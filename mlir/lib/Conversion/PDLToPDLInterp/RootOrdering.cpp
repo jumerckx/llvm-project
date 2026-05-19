@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "RootOrdering.h"
+#include "mlir/Conversion/PDLToPDLInterp/RootOrdering.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"

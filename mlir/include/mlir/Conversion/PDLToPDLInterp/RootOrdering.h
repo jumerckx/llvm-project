@@ -16,8 +16,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_LIB_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H_
-#define MLIR_LIB_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H_
+#ifndef MLIR_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H
+#define MLIR_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H
 
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/DenseMap.h"
@@ -134,4 +134,4 @@ private:
 } // namespace pdl_to_pdl_interp
 } // namespace mlir
 
-#endif // MLIR_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H_
+#endif // MLIR_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H

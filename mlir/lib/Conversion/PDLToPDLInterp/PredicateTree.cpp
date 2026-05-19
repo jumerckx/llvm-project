@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PredicateTree.h"
-#include "RootOrdering.h"
+#include "mlir/Conversion/PDLToPDLInterp/RootOrdering.h"
 
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/IR/BuiltinOps.h"
