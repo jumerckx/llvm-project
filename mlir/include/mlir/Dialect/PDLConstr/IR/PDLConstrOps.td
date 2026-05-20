@@ -23,49 +23,59 @@ class PDLConstr_Op<string mnemonic, list<Trait> traits = []>
     : Op<PDLConstr_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::PatternOp
+// pdl_constr::MatcherOp
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_PatternOp : PDLConstr_Op<"pattern", [
+def PDLConstr_MatcherOp : PDLConstr_Op<"matcher", [
     IsolatedFromAbove, SingleBlock, NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>,
     Symbol
   ]> {
-  let summary = "Wraps one or more patterns' navigation and constraints";
+  let summary = "Container for the navigation/constraint IR of one matcher";
   let description = [{
-    `pdl_constr.pattern` wraps the navigation and constraint ops shared by one
-    or more sub-patterns in a single block region. The block argument is the
-    root operation. Each successful sub-pattern match is marked by a
-    `pdl_constr.success` op; a `pdl_constr.pattern` may contain multiple such
-    ops once independent patterns have been combined.
+    `pdl_constr.matcher` wraps the navigation, constraint, and matcher-tree
+    structure for one or more sub-patterns sharing a common matcher graph.
+    Its region is a single block whose argument is the root operation.
 
-    Example with a single sub-pattern:
+    The body is a linear, ordered sequence of ops. IR position implicitly
+    encodes AND: every test op above a given point must have succeeded for
+    control to reach that point. The matcher-tree shape (the failure spine)
+    is expressed by nested regions:
+
+    * `pdl_constr.try` opens a new failure scope. Failures inside (or
+      fall-off-end) transfer control to the op immediately following the
+      `pdl_constr.try` in its parent region.
+    * `pdl_constr.switch_op_name` / `pdl_constr.switch_type` are
+      multi-way dispatches; each case region inherits the enclosing failure
+      scope as its default.
+
+    A successful sub-pattern match is marked by `pdl_constr.success`, which
+    may appear at any depth and carries its own benefit. A matcher therefore
+    aggregates multiple logical patterns that share a common navigation /
+    test prefix.
+
+    Example:
 
     ```mlir
-    pdl_constr.pattern @name benefit(1) root(%root : !pdl.operation) {
-      // ... navigation ops, constraint ops, combinators ...
-      pdl_constr.success %pred, @rewriters::@my_rewriter
-    }
-    ```
-
-    Example with two sub-patterns combined into one:
-
-    ```mlir
-    pdl_constr.pattern @combined benefit(1) root(%root : !pdl.operation) {
-      // ... shared navigation / constraint ops ...
-      pdl_constr.success %predA, @rewriters::@rewrite_a
-      pdl_constr.success %predB, @rewriters::@rewrite_b
+    pdl_constr.matcher @combined root(%root : !pdl.operation) {
+      pdl_constr.has_name %root, "arith.addi"
+      pdl_constr.try {
+        // alternative 1
+        pdl_constr.success @rewriters::@rewrite_a benefit(2)
+      }
+      pdl_constr.try {
+        // alternative 2
+        pdl_constr.success @rewriters::@rewrite_b benefit(1)
+      }
     }
     ```
   }];
 
-  let arguments = (ins ConfinedAttr<I16Attr, [IntNonNegative]>:$benefit,
-                       OptionalAttr<SymbolNameAttr>:$sym_name);
+  let arguments = (ins OptionalAttr<SymbolNameAttr>:$sym_name);
   let regions = (region SizedRegion<1>:$bodyRegion);
 
   let assemblyFormat = [{
-    ($sym_name^)? `:` `benefit` `(` $benefit `)` `root`
-    custom<PatternRegion>($bodyRegion)
+    ($sym_name^)? `root` custom<MatcherRegion>($bodyRegion)
     attr-dict-with-keyword
   }];
   let extraClassDeclaration = [{
@@ -73,10 +83,117 @@ def PDLConstr_PatternOp : PDLConstr_Op<"pattern", [
     // SymbolOpInterface Methods
     //===------------------------------------------------------------------===//
 
-    /// A PatternOp may optionally define a symbol.
+    /// A MatcherOp may optionally define a symbol.
     bool isOptionalSymbol() { return true; }
   }];
   let hasRegionVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// pdl_constr::TryOp
+//===----------------------------------------------------------------------===//
+
+def PDLConstr_TryOp : PDLConstr_Op<"try", [
+    SingleBlock, NoTerminator,
+    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>
+  ]> {
+  let summary = "Open a new failure scope";
+  let description = [{
+    `pdl_constr.try` introduces a new failure scope. Any test op that fails
+    inside the region, as well as fall-off-end of the region, transfers
+    control to the op immediately following the `pdl_constr.try` in its
+    parent region.
+
+    This is the direct IR analogue of `MatcherNode::failureNode`: a chain of
+    sibling `pdl_constr.try` ops at the same region level encodes the OR of
+    alternative match attempts.
+
+    The region is a single block with no block arguments. Values defined in
+    enclosing regions are visible inside; values defined inside the region
+    are scoped to it.
+  }];
+
+  let regions = (region SizedRegion<1>:$body);
+
+  let assemblyFormat = "$body attr-dict";
+  let hasRegionVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// pdl_constr::SwitchOpNameOp
+//===----------------------------------------------------------------------===//
+
+def PDLConstr_SwitchOpNameOp : PDLConstr_Op<"switch_op_name", [
+    NoTerminator,
+    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>
+  ]> {
+  let summary = "Multi-way dispatch on operation name";
+  let description = [{
+    `pdl_constr.switch_op_name` dispatches on the name of `op`. The op
+    carries one case-region per name in `caseNames`. When the runtime name
+    matches `caseNames[i]`, control enters the i-th case region. If no case
+    matches, control transfers to the enclosing failure scope (the implicit
+    default). Each case region is single-block and inherits the enclosing
+    failure scope: failures inside also transfer to the enclosing failure
+    scope.
+
+    This represents `SwitchNode` directly. Without it, opcode dispatch must
+    be expressed as a chain of equality `try` ops.
+
+    Example:
+
+    ```mlir
+    pdl_constr.switch_op_name %op
+    case "arith.addi" {
+      // ...
+    }
+    case "arith.subi" {
+      // ...
+    }
+    ```
+  }];
+
+  let arguments = (ins PDL_Operation:$op, StrArrayAttr:$caseNames);
+  let regions = (region VariadicRegion<SizedRegion<1>>:$caseRegions);
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// pdl_constr::SwitchTypeOp
+//===----------------------------------------------------------------------===//
+
+def PDLConstr_SwitchTypeOp : PDLConstr_Op<"switch_type", [
+    NoTerminator,
+    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>
+  ]> {
+  let summary = "Multi-way dispatch on a type value";
+  let description = [{
+    `pdl_constr.switch_type` dispatches on the runtime value of a `!pdl.type`.
+    The op carries one case-region per type in `caseTypes`. When the runtime
+    type matches `caseTypes[i]`, control enters the i-th case region. If no
+    case matches, control transfers to the enclosing failure scope. Each
+    case region is single-block and inherits the enclosing failure scope.
+
+    Example:
+
+    ```mlir
+    pdl_constr.switch_type %t
+    case i32 {
+      // ...
+    }
+    case i64 {
+      // ...
+    }
+    ```
+  }];
+
+  let arguments = (ins PDL_Type:$typeValue, TypeArrayAttr:$caseTypes);
+  let regions = (region VariadicRegion<SizedRegion<1>>:$caseRegions);
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -216,155 +333,146 @@ def PDLConstr_GetEachOp : PDLConstr_Op<"get_each", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
-// Constraint Ops
+// Constraint / Test Ops
+//
+// These ops have an implicit control effect: on failure, control transfers
+// to the enclosing failure scope. They are not `Pure`; they must not be DCE'd
+// even when they produce no SSA results.
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_IsNotNullOp : PDLConstr_Op<"is_not_null", [Pure]> {
-  let summary = "Check that an optional value is non-null and unwrap it";
+def PDLConstr_IsNotNullOp : PDLConstr_Op<"is_not_null"> {
+  let summary = "Unwrap an optional value, failing if it is null";
   let description = [{
-    Checks that an optional value is non-null and unwraps it, producing both
-    a `!pdl_constr.pred` and the bare inner value.
+    Checks that an optional value is non-null and produces the bare inner
+    value. If the optional is null, control transfers to the enclosing
+    failure scope (the implicit predicate). Otherwise execution continues
+    and the unwrapped value is in scope.
 
-    The unwrapped result may only be used by ops that are dominated by a
-    successful check of the predicate.
+    By SSA dominance, the unwrapped result can only be used by ops below this
+    one, which mirrors the control-flow guarantee in the lowered form.
   }];
   let arguments = (ins PDLConstr_OptionalType:$optionalValue);
-  let results = (outs PDLConstr_PredType:$pred, PDL_AnyType:$unwrapped);
+  let results = (outs PDL_AnyType:$unwrapped);
   let assemblyFormat = [{
-    $optionalValue `:` type($optionalValue) `->` type($pred) `,` type($unwrapped)
-    attr-dict
+    $optionalValue `:` type($optionalValue) `->` type($unwrapped) attr-dict
   }];
   let hasVerifier = 1;
 }
 
-def PDLConstr_HasNameOp : PDLConstr_Op<"has_name", [Pure]> {
-  let summary = "Check the operation name";
+def PDLConstr_HasNameOp : PDLConstr_Op<"has_name"> {
+  let summary = "Test the operation name";
+  let description = [{
+    Tests that `op` has the given name. On failure transfers control to the
+    enclosing failure scope.
+  }];
   let arguments = (ins PDL_Operation:$op, StrAttr:$name);
-  let results = (outs PDLConstr_PredType:$pred);
   let assemblyFormat = "$op `,` $name attr-dict";
 }
 
-def PDLConstr_EqualOp : PDLConstr_Op<"equal", [Pure, SameTypeOperands]> {
-  let summary = "Check equality of two values";
+def PDLConstr_EqualOp : PDLConstr_Op<"equal", [SameTypeOperands]> {
+  let summary = "Test equality of two values";
+  let description = [{
+    Tests that `lhs` and `rhs` are equal at runtime. On failure transfers
+    control to the enclosing failure scope.
+  }];
   let arguments = (ins PDL_AnyType:$lhs, PDL_AnyType:$rhs);
-  let results = (outs PDLConstr_PredType:$pred);
   let assemblyFormat = "$lhs `,` $rhs `:` type($lhs) attr-dict";
 }
 
-def PDLConstr_HasTypeOp : PDLConstr_Op<"has_type", [Pure]> {
-  let summary = "Check that a type matches a constant type";
-  let arguments = (ins PDL_Type:$type, TypeAttr:$constantType);
-  let results = (outs PDLConstr_PredType:$pred);
-  let assemblyFormat = "$type `,` $constantType attr-dict";
+def PDLConstr_HasTypeOp : PDLConstr_Op<"has_type"> {
+  let summary = "Test that a type matches a constant type";
+  let arguments = (ins PDL_Type:$typeValue, TypeAttr:$constantType);
+  let assemblyFormat = "$typeValue `,` $constantType attr-dict";
 }
 
-def PDLConstr_HasTypesOp : PDLConstr_Op<"has_types", [Pure]> {
-  let summary = "Check that a range of types matches a constant array of types";
+def PDLConstr_HasTypesOp : PDLConstr_Op<"has_types"> {
+  let summary = "Test that a range of types matches a constant array of types";
   let description = [{
-    Checks that a `!pdl.range<type>` matches a statically known array of types.
+    Tests that a `!pdl.range<type>` matches a statically known array of types.
   }];
   let arguments = (ins PDL_RangeOf<PDL_Type>:$types,
                        TypeArrayAttr:$constantTypes);
-  let results = (outs PDLConstr_PredType:$pred);
   let assemblyFormat = "$types `,` $constantTypes attr-dict";
 }
 
-def PDLConstr_HasAttrValueOp : PDLConstr_Op<"has_attr_value", [Pure]> {
-  let summary = "Check that an attribute matches a constant value";
+def PDLConstr_HasAttrValueOp : PDLConstr_Op<"has_attr_value"> {
+  let summary = "Test that an attribute matches a constant value";
   let arguments = (ins PDL_Attribute:$attribute, AnyAttr:$value);
-  let results = (outs PDLConstr_PredType:$pred);
   let assemblyFormat = "$attribute `is` $value attr-dict";
 }
 
-def PDLConstr_CheckOperandCountOp : PDLConstr_Op<"check_operand_count", [Pure]> {
-  let summary = "Check the operand count of an operation";
+def PDLConstr_CheckOperandCountOp : PDLConstr_Op<"check_operand_count"> {
+  let summary = "Test the operand count of an operation";
   let arguments = (ins PDL_Operation:$op,
                        ConfinedAttr<I32Attr, [IntNonNegative]>:$count,
                        UnitAttr:$atLeast);
-  let results = (outs PDLConstr_PredType:$pred);
   let assemblyFormat = [{
     $op `is` (`at_least` $atLeast^)? $count attr-dict
   }];
 }
 
-def PDLConstr_CheckResultCountOp : PDLConstr_Op<"check_result_count", [Pure]> {
-  let summary = "Check the result count of an operation";
+def PDLConstr_CheckResultCountOp : PDLConstr_Op<"check_result_count"> {
+  let summary = "Test the result count of an operation";
   let arguments = (ins PDL_Operation:$op,
                        ConfinedAttr<I32Attr, [IntNonNegative]>:$count,
                        UnitAttr:$atLeast);
-  let results = (outs PDLConstr_PredType:$pred);
   let assemblyFormat = [{
     $op `is` (`at_least` $atLeast^)? $count attr-dict
   }];
 }
 
-def PDLConstr_ApplyNativeConstraintOp : PDLConstr_Op<"apply_native_constraint", [Pure]> {
+def PDLConstr_ApplyNativeConstraintOp : PDLConstr_Op<"apply_native_constraint"> {
   let summary = "Apply a native constraint";
   let description = [{
-    Applies an externally registered native constraint. Returns a
-    `!pdl_constr.pred` as the first result, and may return additional
-    `!pdl.*` results.
+    Applies an externally registered native constraint. On failure transfers
+    control to the enclosing failure scope. The constraint may produce
+    additional `!pdl.*` results that downstream ops consume.
   }];
   let arguments = (ins StrAttr:$name,
                        Variadic<PDL_AnyType>:$args,
                        DefaultValuedAttr<BoolAttr, "false">:$isNegated);
-  let results = (outs PDLConstr_PredType:$pred, Variadic<PDL_AnyType>:$constraintResults);
+  let results = (outs Variadic<PDL_AnyType>:$constraintResults);
   let assemblyFormat = [{
     $name `(` $args `:` type($args) `)` (`:` type($constraintResults)^)? attr-dict
   }];
 }
 
 //===----------------------------------------------------------------------===//
-// Combinators
-//===----------------------------------------------------------------------===//
-
-def PDLConstr_AllOp : PDLConstr_Op<"all", [Pure]> {
-  let summary = "Logical AND over predicate values";
-  let arguments = (ins Variadic<PDLConstr_PredType>:$preds);
-  let results = (outs PDLConstr_PredType:$result);
-  let assemblyFormat = "$preds attr-dict";
-}
-
-def PDLConstr_AnyOp : PDLConstr_Op<"any", [Pure]> {
-  let summary = "Logical OR over predicate values";
-  let arguments = (ins Variadic<PDLConstr_PredType>:$preds);
-  let results = (outs PDLConstr_PredType:$result);
-  let assemblyFormat = "$preds attr-dict";
-}
-
-//===----------------------------------------------------------------------===//
-// Terminator
+// pdl_constr::SuccessOp
 //===----------------------------------------------------------------------===//
 
 def PDLConstr_SuccessOp : PDLConstr_Op<"success", [
-    DeclareOpInterfaceMethods<SymbolUserOpInterface>,
-    HasParent<"pdl_constr::PatternOp">]> {
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Marks a successful pattern match";
   let description = [{
-    `pdl_constr.success` marks a successful pattern match and identifies the
-    rewriter to invoke. The op takes a single `!pdl_constr.pred` operand
-    (typically the result of `pdl_constr.all` combining all constraints), a
-    symbol reference to the rewriter to invoke, and the values from the match
-    that should be propagated to the rewriter as arguments.
+    `pdl_constr.success` marks a successful pattern match. Its precondition
+    is implicit: every test op above it in the same region, plus every test
+    op in enclosing regions on the path from the matcher root to this op,
+    must have succeeded.
 
-    The signature mirrors `pdl_interp.record_match` so that the rewriter
-    metadata is preserved through the `pdl_constr` level. The lowering to
-    `pdl_interp` forwards the symbol and inputs directly to the
-    `pdl_interp.record_match` op that it generates.
+    Carries a `benefit` (one matcher may hold sub-patterns of different
+    benefits), a symbol reference to the rewriter, and the list of match
+    values to forward. The signature mirrors `pdl_interp.record_match` so
+    that the rewriter metadata passes through unchanged to the
+    `pdl_constr → pdl_interp` lowering, which emits the matching
+    `pdl_interp.record_match`.
 
     Example:
 
     ```mlir
-    pdl_constr.success %pred, @rewriters::@rewriter(%root, %lhs : !pdl.operation, !pdl.value)
+    pdl_constr.success @rewriters::@rewriter
+        benefit(1) (%root, %lhs : !pdl.operation, !pdl.value)
     ```
   }];
 
-  let arguments = (ins PDLConstr_PredType:$pred,
-                       SymbolRefAttr:$rewriter,
+  let arguments = (ins SymbolRefAttr:$rewriter,
+                       ConfinedAttr<I16Attr, [IntNonNegative]>:$benefit,
                        Variadic<PDL_AnyType>:$inputs);
   let assemblyFormat = [{
-    $pred `,` $rewriter (`(` $inputs^ `:` type($inputs) `)`)? attr-dict
+    $rewriter `benefit` `(` $benefit `)`
+    (`(` $inputs^ `:` type($inputs) `)`)? attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 #endif // MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTROPS

@@ -15,14 +15,21 @@ def PDLConstr_Dialect : Dialect {
   let summary = "Intermediate constraint dialect between PDL and PDL_Interp";
   let description = [{
     The `pdl_constr` dialect provides an intermediate representation between
-    `pdl` and `pdl_interp`. It makes pattern constraints, navigation, and
-    predicate logic explicit in MLIR IR, enabling inspection, transformation,
-    and composition before the final lowering to `pdl_interp`.
+    `pdl` and `pdl_interp`. It makes pattern constraints, navigation, and the
+    matcher-tree structure explicit in MLIR IR, enabling inspection,
+    transformation, and composition before the final lowering to `pdl_interp`.
 
-    Constraint ops return `!pdl_constr.pred` values (a boolean-like predicate
-    result type). These are combined with `all` / `any` combinators and
-    consumed by `success`. Navigation ops that can fail return
-    `!pdl_constr.optional<T>` which must be unwrapped via `is_not_null`.
+    The dialect is **ordered**: IR position determines materialization order,
+    and the matcher-tree structure (the failure spine) is expressed directly
+    via nested regions (`pdl_constr.try`, `pdl_constr.switch_*`). Test ops
+    have an implicit control effect — on failure, control transfers to the
+    enclosing failure scope. There is no SSA predicate type; the predicate is
+    the control-flow position.
+
+    Navigation ops that can fail return `!pdl_constr.optional<T>`. The only
+    way to obtain the bare value is via `pdl_constr.is_not_null`, which
+    additionally has the implicit control effect of branching to the failure
+    scope when the optional is null.
   }];
 
   let name = "pdl_constr";
