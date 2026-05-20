@@ -30,7 +30,7 @@ class PDL_Op<string mnemonic, list<Trait> traits = []>
 //===----------------------------------------------------------------------===//
 
 def PDL_ApplyNativeConstraintOp
-    : PDL_Op<"apply_native_constraint", [HasParent<"pdl::PatternOp, pdl_constr::PatternOp">]> {
+    : PDL_Op<"apply_native_constraint", [HasParent<"pdl::PatternOp">]> {
   let summary = "Apply a native constraint to a set of provided entities";
   let description = [{
     `pdl.apply_native_constraint` operations apply a native C++ constraint, that
@@ -172,7 +172,7 @@ def PDL_EraseOp : PDL_Op<"erase", [HasParent<"pdl::RewriteOp">]> {
 //===----------------------------------------------------------------------===//
 
 def PDL_OperandOp
-    : PDL_Op<"operand", [HasParent<"pdl::PatternOp, pdl_constr::PatternOp">]> {
+    : PDL_Op<"operand", [HasParent<"pdl::PatternOp">]> {
   let summary = "Define an external input operand in a pattern";
   let description = [{
     `pdl.operand` operations capture external operand edges into an operation
@@ -211,7 +211,7 @@ def PDL_OperandOp
 //===----------------------------------------------------------------------===//
 
 def PDL_OperandsOp
-    : PDL_Op<"operands", [HasParent<"pdl::PatternOp, pdl_constr::PatternOp">]> {
+    : PDL_Op<"operands", [HasParent<"pdl::PatternOp">]> {
   let summary = "Define a range of input operands in a pattern";
   let description = [{
     `pdl.operands` operations capture external operand range edges into an
