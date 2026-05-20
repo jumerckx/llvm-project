@@ -7,9 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/PDLConstr/IR/PDLConstr.h"
+#include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.h"
 #include "mlir/Dialect/PDLConstr/IR/PDLConstrTypes.h"
-#include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -63,11 +63,11 @@ OptionalType::verify(function_ref<InFlightDiagnostic()> emitError,
 }
 
 //===----------------------------------------------------------------------===//
-// PatternOp
+// MatcherOp
 //===----------------------------------------------------------------------===//
 
-/// Custom parser for the pattern region: parses `(%arg : type) { body }`.
-static ParseResult parsePatternRegion(OpAsmParser &parser, Region &region) {
+/// Custom parser for the matcher region: parses `(%arg : type) { body }`.
+static ParseResult parseMatcherRegion(OpAsmParser &parser, Region &region) {
   OpAsmParser::Argument arg;
   if (parser.parseLParen() || parser.parseArgument(arg, /*allowType=*/true) ||
       parser.parseRParen())
@@ -76,8 +76,8 @@ static ParseResult parsePatternRegion(OpAsmParser &parser, Region &region) {
   return parser.parseRegion(region, {arg});
 }
 
-/// Custom printer for the pattern region.
-static void printPatternRegion(OpAsmPrinter &p, Operation *op, Region &region) {
+/// Custom printer for the matcher region.
+static void printMatcherRegion(OpAsmPrinter &p, Operation *op, Region &region) {
   p << "(";
   if (!region.empty() && region.front().getNumArguments() > 0) {
     BlockArgument arg = region.front().getArgument(0);
@@ -87,7 +87,13 @@ static void printPatternRegion(OpAsmPrinter &p, Operation *op, Region &region) {
   p.printRegion(region, /*printEntryBlockArgs=*/false);
 }
 
-LogicalResult PatternOp::verifyRegions() {
+/// Returns true if `region` (or any nested region) contains a SuccessOp.
+static bool regionContainsSuccess(Region &region) {
+  WalkResult result = region.walk([&](SuccessOp) { return WalkResult::interrupt(); });
+  return result.wasInterrupted();
+}
+
+LogicalResult MatcherOp::verifyRegions() {
   Region &body = getBodyRegion();
   if (body.empty())
     return emitOpError("expected non-empty body region");
@@ -102,16 +108,203 @@ LogicalResult PatternOp::verifyRegions() {
     return emitOpError(
         "expected body block argument to be of type !pdl.operation");
 
-  // Verify the body contains at least one `pdl_constr.success` op. Multiple
-  // success ops are permitted to support combined patterns.
-  if (block.getOps<SuccessOp>().empty())
-    return emitOpError("expected body to contain at least one "
-                       "`pdl_constr.success`");
+  // Verify the matcher contains at least one `pdl_constr.success` op
+  // somewhere in its region tree.
+  if (!regionContainsSuccess(body))
+    return emitOpError("expected matcher to contain at least one "
+                       "`pdl_constr.success` (directly or transitively)");
 
   return success();
 }
 
-StringRef PatternOp::getDefaultDialect() {
+StringRef MatcherOp::getDefaultDialect() {
+  return PDLConstrDialect::getDialectNamespace();
+}
+
+//===----------------------------------------------------------------------===//
+// TryOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult TryOp::verifyRegions() {
+  // A `try` region with no transitive success op is dead; reject it so that
+  // the IR is meaningful.
+  if (!regionContainsSuccess(getBody()))
+    return emitOpError("`pdl_constr.try` region contains no "
+                       "`pdl_constr.success` (directly or transitively); the "
+                       "region is dead");
+  return success();
+}
+
+StringRef TryOp::getDefaultDialect() {
+  return PDLConstrDialect::getDialectNamespace();
+}
+
+//===----------------------------------------------------------------------===//
+// SwitchOpNameOp / SwitchTypeOp helpers
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Parse a sequence of `case <case-spec> { region }` clauses. `parseCase` is
+/// invoked once per clause to parse the case-specific bit (a string for
+/// op-name switches, a type for type switches). Returns the parsed cases as
+/// an array attribute (built from the per-case parsed attrs) along with the
+/// per-case regions.
+template <typename ParseCaseFn>
+ParseResult
+parseSwitchCases(OpAsmParser &parser, ArrayAttr &caseAttr,
+                 SmallVectorImpl<std::unique_ptr<Region>> &caseRegions,
+                 ParseCaseFn parseCase) {
+  SmallVector<Attribute> caseAttrs;
+  while (succeeded(parser.parseOptionalKeyword("case"))) {
+    Attribute caseValue;
+    if (failed(parseCase(parser, caseValue)))
+      return failure();
+    caseAttrs.push_back(caseValue);
+
+    auto region = std::make_unique<Region>();
+    if (parser.parseRegion(*region, /*arguments=*/{}))
+      return failure();
+    caseRegions.push_back(std::move(region));
+  }
+  caseAttr = parser.getBuilder().getArrayAttr(caseAttrs);
+  return success();
+}
+
+/// Print a sequence of `case <case-spec> { region }` clauses.
+template <typename PrintCaseFn>
+void printSwitchCases(OpAsmPrinter &p, ArrayAttr caseAttr,
+                      MutableArrayRef<Region> caseRegions,
+                      PrintCaseFn printCase) {
+  for (auto [attr, region] : llvm::zip(caseAttr, caseRegions)) {
+    p.printNewline();
+    p << "case ";
+    printCase(p, attr);
+    p << ' ';
+    p.printRegion(region, /*printEntryBlockArgs=*/false);
+  }
+}
+
+} // namespace
+
+//===----------------------------------------------------------------------===//
+// SwitchOpNameOp
+//===----------------------------------------------------------------------===//
+
+ParseResult SwitchOpNameOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand op;
+  Type opType;
+  if (parser.parseOperand(op))
+    return failure();
+
+  ArrayAttr cases;
+  SmallVector<std::unique_ptr<Region>> caseRegions;
+  if (parseSwitchCases(
+          parser, cases, caseRegions,
+          [](OpAsmParser &p, Attribute &out) -> ParseResult {
+            std::string name;
+            if (p.parseString(&name))
+              return failure();
+            out = p.getBuilder().getStringAttr(name);
+            return success();
+          }))
+    return failure();
+
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+  result.addAttribute("caseNames", cases);
+
+  opType = parser.getBuilder().getType<pdl::OperationType>();
+  if (parser.resolveOperand(op, opType, result.operands))
+    return failure();
+
+  for (auto &region : caseRegions)
+    result.addRegion(std::move(region));
+  return success();
+}
+
+void SwitchOpNameOp::print(OpAsmPrinter &p) {
+  p << ' ' << getOp();
+  printSwitchCases(p, getCaseNames(), getCaseRegions(),
+                   [](OpAsmPrinter &p, Attribute attr) {
+                     p.printAttributeWithoutType(attr);
+                   });
+  p.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"caseNames"});
+}
+
+LogicalResult SwitchOpNameOp::verify() {
+  if (getCaseNames().size() != getCaseRegions().size())
+    return emitOpError("expected one region per case name (")
+           << getCaseNames().size() << " names vs "
+           << getCaseRegions().size() << " regions)";
+  for (Attribute attr : getCaseNames()) {
+    if (!llvm::isa<StringAttr>(attr))
+      return emitOpError("case names must be string attributes");
+  }
+  return success();
+}
+
+StringRef SwitchOpNameOp::getDefaultDialect() {
+  return PDLConstrDialect::getDialectNamespace();
+}
+
+//===----------------------------------------------------------------------===//
+// SwitchTypeOp
+//===----------------------------------------------------------------------===//
+
+ParseResult SwitchTypeOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand type;
+  if (parser.parseOperand(type))
+    return failure();
+
+  ArrayAttr cases;
+  SmallVector<std::unique_ptr<Region>> caseRegions;
+  if (parseSwitchCases(
+          parser, cases, caseRegions,
+          [](OpAsmParser &p, Attribute &out) -> ParseResult {
+            Type t;
+            if (p.parseType(t))
+              return failure();
+            out = TypeAttr::get(t);
+            return success();
+          }))
+    return failure();
+
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+  result.addAttribute("caseTypes", cases);
+
+  Type pdlType = parser.getBuilder().getType<pdl::TypeType>();
+  if (parser.resolveOperand(type, pdlType, result.operands))
+    return failure();
+
+  for (auto &region : caseRegions)
+    result.addRegion(std::move(region));
+  return success();
+}
+
+void SwitchTypeOp::print(OpAsmPrinter &p) {
+  p << ' ' << getTypeValue();
+  printSwitchCases(p, getCaseTypes(), getCaseRegions(),
+                   [](OpAsmPrinter &p, Attribute attr) {
+                     p.printType(llvm::cast<TypeAttr>(attr).getValue());
+                   });
+  p.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"caseTypes"});
+}
+
+LogicalResult SwitchTypeOp::verify() {
+  if (getCaseTypes().size() != getCaseRegions().size())
+    return emitOpError("expected one region per case type (")
+           << getCaseTypes().size() << " types vs "
+           << getCaseRegions().size() << " regions)";
+  for (Attribute attr : getCaseTypes()) {
+    if (!llvm::isa<TypeAttr>(attr))
+      return emitOpError("case types must be type attributes");
+  }
+  return success();
+}
+
+StringRef SwitchTypeOp::getDefaultDialect() {
   return PDLConstrDialect::getDialectNamespace();
 }
 
@@ -151,8 +344,7 @@ LogicalResult GetEachOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult IsNotNullOp::verify() {
-  auto optType =
-      llvm::cast<OptionalType>(getOptionalValue().getType());
+  auto optType = llvm::cast<OptionalType>(getOptionalValue().getType());
   if (optType.getInnerType() != getUnwrapped().getType())
     return emitOpError("expected unwrapped result type ")
            << getUnwrapped().getType() << " to match inner type of optional "
@@ -163,6 +355,14 @@ LogicalResult IsNotNullOp::verify() {
 //===----------------------------------------------------------------------===//
 // SuccessOp
 //===----------------------------------------------------------------------===//
+
+LogicalResult SuccessOp::verify() {
+  // Must be inside a matcher (possibly via nested try / switch regions).
+  if (!(*this)->getParentOfType<MatcherOp>())
+    return emitOpError(
+        "`pdl_constr.success` must be enclosed by a `pdl_constr.matcher`");
+  return success();
+}
 
 LogicalResult
 SuccessOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
