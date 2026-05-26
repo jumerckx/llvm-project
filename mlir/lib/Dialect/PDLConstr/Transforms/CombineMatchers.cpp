@@ -13,7 +13,7 @@
 // `PDLToPDLInterp/PredicateTree.cpp`.
 //
 // Canonical predicates are represented as actual `pdl_constr` ops in a
-// separate "pool" region: exactly one pool op per equivalence class of
+// standalone "pool" block: exactly one pool op per equivalence class of
 // `(op name, attribute dictionary, canonical-operand-Values)`. The pool's
 // block argument is the canonical root. The whole point of `pdl_constr` is
 // that predicates and their dependency edges live in SSA; this pass leans on
@@ -161,11 +161,13 @@ private:
 
   ModuleOp module;
 
-  /// Canonical pool: a detached region whose ops are the unique predicates.
+  /// Canonical pool: a standalone block whose ops are the unique predicates.
   /// The block argument is the canonical root operation value. Pool ops'
   /// SSA results are the canonical "IDs" for every constraint-produced value.
-  std::unique_ptr<Region> poolRegion;
-  Block *poolBody = nullptr;
+  /// The block has no parent region — we never need to traverse upward from
+  /// it, and side-stepping the region keeps `Region::getContext()` (which
+  /// asserts on detached regions) out of the picture.
+  std::unique_ptr<Block> poolBody;
   Value poolRoot;
 
   /// Hash-based dedup for canonical pool ops.
@@ -200,9 +202,9 @@ Operation *Combiner::getOrCreatePoolOp(Operation *modelOp,
     return it->second;
 
   // Clone modelOp into the pool with operands rewired to canonical values.
-  // We can't use `OpBuilder(poolBody, ...)` here because that constructor
-  // walks `block->getParent()->getContext()`, and the pool region is
-  // intentionally detached. `Operation::clone` doesn't need a builder.
+  // `Operation::clone` doesn't need a builder, which is the point: the pool
+  // block is standalone (no parent region), so `OpBuilder(poolBody, ...)`
+  // would assert when fetching the context via the (nonexistent) region.
   IRMapping mapping;
   for (auto [orig, canonical] :
        llvm::zip(modelOp->getOperands(), canonicalOperands))
@@ -219,8 +221,7 @@ LogicalResult Combiner::buildCanonicalPool() {
   // Snapshot input matchers before we touch the module.
   SmallVector<MatcherOp> inputMatchers(module.getOps<MatcherOp>());
 
-  poolRegion = std::make_unique<Region>();
-  poolBody = &poolRegion->emplaceBlock();
+  poolBody = std::make_unique<Block>();
   poolRoot = poolBody->addArgument(
       pdl::OperationType::get(module.getContext()), module.getLoc());
 
@@ -337,7 +338,7 @@ void Combiner::sortCanonicalPool() {
   stableTopologicalSort(sortedPoolOps.begin(), sortedPoolOps.end(), dependsOn);
 
   for (Operation *op : sortedPoolOps)
-    op->moveBefore(poolBody, poolBody->end());
+    op->moveBefore(poolBody.get(), poolBody->end());
 }
 
 //===----------------------------------------------------------------------===//
