@@ -195,20 +195,20 @@ private:
 Operation *Combiner::getOrCreatePoolOp(Operation *modelOp,
                                       ArrayRef<Value> canonicalOperands) {
   PoolKey key{modelOp->getName(), modelOp->getAttrDictionary(),
-              SmallVector<Value, 4>(canonicalOperands.begin(),
-                                    canonicalOperands.end())};
-  auto it = poolDedup.find(key);
-  if (it != poolDedup.end())
+              SmallVector<Value, 4>(canonicalOperands)};
+  if (auto it = poolDedup.find(key); it != poolDedup.end())
     return it->second;
 
-  OpBuilder builder(poolBody, poolBody->end());
-  OperationState state(modelOp->getLoc(), modelOp->getName());
-  state.operands = llvm::to_vector(canonicalOperands);
-  state.types = llvm::to_vector(modelOp->getResultTypes());
-  state.attributes = modelOp->getAttrs();
-  for (unsigned i = 0, e = modelOp->getNumRegions(); i != e; ++i)
-    state.regions.push_back(std::make_unique<Region>());
-  Operation *poolOp = builder.create(state);
+  // Clone modelOp into the pool with operands rewired to canonical values.
+  // We can't use `OpBuilder(poolBody, ...)` here because that constructor
+  // walks `block->getParent()->getContext()`, and the pool region is
+  // intentionally detached. `Operation::clone` doesn't need a builder.
+  IRMapping mapping;
+  for (auto [orig, canonical] :
+       llvm::zip(modelOp->getOperands(), canonicalOperands))
+    mapping.map(orig, canonical);
+  Operation *poolOp = modelOp->cloneWithoutRegions(mapping);
+  poolBody->push_back(poolOp);
 
   insertionIndex[poolOp] = poolDedup.size();
   poolDedup[key] = poolOp;
@@ -392,38 +392,14 @@ void Combiner::buildTree() {
 // Phase 4: emit IR by cloning canonical pool ops into the combined matcher.
 //===----------------------------------------------------------------------===//
 
-/// Clone the canonical pool op `poolOp` into the current insertion point,
-/// rewiring operands and recording its results through `mapping` (pool Value
-/// -> combined-matcher Value).
-static Operation *cloneTestOp(OpBuilder &builder, Operation *poolOp,
-                              IRMapping &mapping) {
-  SmallVector<Value, 4> operands;
-  operands.reserve(poolOp->getNumOperands());
-  for (Value v : poolOp->getOperands())
-    operands.push_back(mapping.lookup(v));
-
-  OperationState state(poolOp->getLoc(), poolOp->getName());
-  state.operands = operands;
-  state.types = llvm::to_vector(poolOp->getResultTypes());
-  state.attributes = poolOp->getAttrs();
-  for (unsigned i = 0, e = poolOp->getNumRegions(); i != e; ++i)
-    state.regions.push_back(std::make_unique<Region>());
-  Operation *cloned = builder.create(state);
-
-  for (auto [orig, clone] :
-       llvm::zip(poolOp->getResults(), cloned->getResults()))
-    mapping.map(orig, clone);
-
-  return cloned;
-}
-
 void Combiner::emitNode(OpBuilder &builder, Location loc, TreeNode *node,
                         IRMapping &mapping) {
   // Walk down the failure-spine chain, emitting siblings sequentially in the
   // current scope. A Success node emits its success op and continues with
   // the next alternative; a Test node with a failurePath wraps its test +
   // success path in a `pdl_constr.try` (so a test failure exits to the next
-  // sibling).
+  // sibling). `builder.clone(*pred, mapping)` reuses the canonical pool op
+  // as a template and records the new SSA Values in `mapping`.
   while (node) {
     if (node->kind == TreeNode::Kind::Success) {
       SmallVector<Value, 4> inputs;
@@ -439,21 +415,23 @@ void Combiner::emitNode(OpBuilder &builder, Location loc, TreeNode *node,
 
     if (node->failurePath) {
       // Failure of the test must transfer to the failurePath (in the parent
-      // scope), so wrap test + success path in a `pdl_constr.try`.
+      // scope), so wrap test + success path in a `pdl_constr.try`. The
+      // InsertionGuard restores the parent scope before we advance to the
+      // failurePath sibling.
       TryOp tryOp = TryOp::create(builder, loc);
       Block &tryBlock = tryOp.getBody().emplaceBlock();
       {
         OpBuilder::InsertionGuard guard(builder);
         builder.setInsertionPointToStart(&tryBlock);
         IRMapping tryMapping = mapping;
-        cloneTestOp(builder, node->pred, tryMapping);
+        builder.clone(*node->pred, tryMapping);
         emitNode(builder, loc, node->successPath.get(), tryMapping);
       }
       node = node->failurePath.get();
     } else {
       // No failure alternative — emit the test in the current scope; its
       // failure naturally transfers to the enclosing failure scope.
-      cloneTestOp(builder, node->pred, mapping);
+      builder.clone(*node->pred, mapping);
       node = node->successPath.get();
     }
   }
