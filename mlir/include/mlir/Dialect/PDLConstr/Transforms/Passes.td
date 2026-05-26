@@ -11,21 +11,22 @@
 
 include "mlir/Pass/PassBase.td"
 
-def PDLConstrCombinePatternsPass
-    : Pass<"pdl-constr-combine-patterns", "ModuleOp"> {
-  let summary = "Combine multiple pdl_constr.pattern ops into a single one";
+def PDLConstrCombineMatchersPass
+    : Pass<"pdl-constr-combine-matchers", "ModuleOp"> {
+  let summary = "Combine multiple pdl_constr.matcher ops into a single one";
   let description = [{
-    Merges all `pdl_constr.pattern` ops within a module into a single
-    `pdl_constr.pattern`. Structurally-equivalent navigation and constraint
-    ops (same op kind, same attributes, same operand SSA values, same result
-    types) are deduplicated, so the combined pattern shares its constraint
-    work across the originating patterns. Each input pattern's
-    `pdl_constr.success` op is preserved as an independent success record
-    inside the combined body.
+    Merges all `pdl_constr.matcher` ops within a module into one combined
+    matcher whose body materializes the matcher tree as IR.
 
-    The combined `pdl_constr.pattern` carries the maximum benefit among its
-    inputs. Per-success benefits are not yet represented — when input
-    patterns disagree on benefit, that information is lost at this step.
+    The combining algorithm mirrors the cost-based merge that the original
+    `PDLToPDLInterp` pass performed in C++ on its `MatcherNode` tree. Each
+    constraint op in an input matcher is treated as one entry of a globally
+    sorted predicate list; entries shared across matchers are emitted once,
+    and divergent suffixes appear as sibling `pdl_constr.try` regions or as
+    cases of `pdl_constr.switch_op_name` / `pdl_constr.switch_type`. The
+    `pdl_constr.success` ops of the input matchers are preserved verbatim
+    (with their rewriter symbols and forwarded match values) at the leaves
+    of the resulting tree.
   }];
   let dependentDialects = ["pdl_constr::PDLConstrDialect"];
 }
