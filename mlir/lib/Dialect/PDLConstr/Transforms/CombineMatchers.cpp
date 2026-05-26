@@ -397,10 +397,21 @@ void Combiner::emitNode(OpBuilder &builder, Location loc, TreeNode *node,
                         IRMapping &mapping) {
   // Walk down the failure-spine chain, emitting siblings sequentially in the
   // current scope. A Success node emits its success op and continues with
-  // the next alternative; a Test node with a failurePath wraps its test +
-  // success path in a `pdl_constr.try` (so a test failure exits to the next
-  // sibling). `builder.clone(*pred, mapping)` reuses the canonical pool op
-  // as a template and records the new SSA Values in `mapping`.
+  // the next alternative; a Test node either wraps its test + success path
+  // in a `pdl_constr.try` (so failure transfers to the next sibling) or
+  // emits the test bare when it's the only alternative at this scope.
+  // `builder.clone(*pred, mapping)` reuses the canonical pool op as a
+  // template and records the new SSA Values in `mapping`.
+  //
+  // A Test is wrapped iff it has a sibling alternative at the same scope
+  // (either a following failurePath or an already-emitted preceding wrapped
+  // sibling, tracked by `hadTestSibling`). The trailing test in a multi-way
+  // chain must wrap too, even though its failure already transfers to the
+  // enclosing scope: without the wrapper `foldSwitchAt` cannot collapse it
+  // into a sibling `switch_*` since that requires a contiguous run of
+  // `TryOp`s. A *sole* test alternative still emits bare — wrapping it
+  // would add empty scaffolding for no fold opportunity.
+  bool hadTestSibling = false;
   while (node) {
     if (node->kind == TreeNode::Kind::Success) {
       SmallVector<Value, 4> inputs;
@@ -414,11 +425,7 @@ void Combiner::emitNode(OpBuilder &builder, Location loc, TreeNode *node,
       continue;
     }
 
-    if (node->failurePath) {
-      // Failure of the test must transfer to the failurePath (in the parent
-      // scope), so wrap test + success path in a `pdl_constr.try`. The
-      // InsertionGuard restores the parent scope before we advance to the
-      // failurePath sibling.
+    if (node->failurePath || hadTestSibling) {
       TryOp tryOp = TryOp::create(builder, loc);
       Block &tryBlock = tryOp.getBody().emplaceBlock();
       {
@@ -428,10 +435,11 @@ void Combiner::emitNode(OpBuilder &builder, Location loc, TreeNode *node,
         builder.clone(*node->pred, tryMapping);
         emitNode(builder, loc, node->successPath.get(), tryMapping);
       }
+      hadTestSibling = true;
       node = node->failurePath.get();
     } else {
-      // No failure alternative — emit the test in the current scope; its
-      // failure naturally transfers to the enclosing failure scope.
+      // Sole test alternative at this scope: emit bare; failure transfers
+      // to the enclosing failure scope.
       builder.clone(*node->pred, mapping);
       node = node->successPath.get();
     }
@@ -509,9 +517,12 @@ void Combiner::foldSwitches(Region &region) {
             newBlock.getOperations().splice(newBlock.end(),
                                             oldBlock.getOperations());
           }
-          it = std::next(Block::iterator(switchOp));
+          // Erase the now-empty case tries before taking `next(switchOp)`:
+          // switchOp was inserted just before cases.front(), so taking the
+          // iterator first would leave it dangling once the trys are erased.
           for (TryOp t : cases)
             t.erase();
+          it = std::next(Block::iterator(switchOp));
           continue;
         }
       }
@@ -538,9 +549,9 @@ void Combiner::foldSwitches(Region &region) {
             newBlock.getOperations().splice(newBlock.end(),
                                             oldBlock.getOperations());
           }
-          it = std::next(Block::iterator(switchOp));
           for (TryOp t : cases)
             t.erase();
+          it = std::next(Block::iterator(switchOp));
           continue;
         }
       }
