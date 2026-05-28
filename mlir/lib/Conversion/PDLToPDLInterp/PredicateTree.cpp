@@ -1005,9 +1005,27 @@ MatcherNode::generateMatcherTree(ModuleOp module, PredicateBuilder &builder,
     return *lhs < *rhs;
   });
 
+  LDBG() << "Sorted predicates (after cost sort):";
+  for (auto *p : ordered) {
+    LDBG() << "  * primary=" << p->primary << " secondary=" << p->secondary
+           << " depth=" << p->position->getOperationDepth()
+           << " posKind=" << (unsigned)p->position->getKind()
+           << " questKind=" << (unsigned)p->question->getKind()
+           << " id=" << p->id;
+  }
+
   // Mostly keep the now established order, but also ensure that
   // ConstraintQuestions come after the results they use.
   stableTopologicalSort(ordered.begin(), ordered.end(), dependsOn);
+
+  LDBG() << "Sorted predicates (after topological sort):";
+  for (auto *p : ordered) {
+    LDBG() << "  * primary=" << p->primary << " secondary=" << p->secondary
+           << " depth=" << p->position->getOperationDepth()
+           << " posKind=" << (unsigned)p->position->getKind()
+           << " questKind=" << (unsigned)p->question->getKind()
+           << " id=" << p->id;
+  }
 
   // Build the matchers for each of the pattern predicate lists.
   std::unique_ptr<MatcherNode> root;
