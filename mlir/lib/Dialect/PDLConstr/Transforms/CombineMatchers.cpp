@@ -39,6 +39,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
+
+#define DEBUG_TYPE "pdl-constr-combine-matchers"
 
 namespace mlir {
 namespace pdl_constr {
@@ -458,9 +462,27 @@ void Combiner::sortCanonicalPool() {
                            depthA, posKA, questKA, insertionIndex[a]);
   });
 
+  LDBG() << "Sorted predicates (after cost sort):";
+  for (Operation *op : sortedPoolOps) {
+    LDBG() << "  * primary=" << primary[op] << " secondary=" << secondary[op]
+           << " depth=" << getPredicateDepth(op, depthsCache)
+           << " posKind=" << getPredicatePosKind(op, depthsCache)
+           << " questKind=" << getQuestKind(op)
+           << " id=" << insertionIndex[op] << " op=" << op->getName();
+  }
+
   // Stabilize so operand-producers precede their users (preserves SSA
   // dominance once we reflect the order back into the pool block).
   stableTopologicalSort(sortedPoolOps.begin(), sortedPoolOps.end(), dependsOn);
+
+  LDBG() << "Sorted predicates (after topological sort):";
+  for (Operation *op : sortedPoolOps) {
+    LDBG() << "  * primary=" << primary[op] << " secondary=" << secondary[op]
+           << " depth=" << getPredicateDepth(op, depthsCache)
+           << " posKind=" << getPredicatePosKind(op, depthsCache)
+           << " questKind=" << getQuestKind(op)
+           << " id=" << insertionIndex[op] << " op=" << op->getName();
+  }
 
   for (Operation *op : sortedPoolOps)
     op->moveBefore(poolBody.get(), poolBody->end());
