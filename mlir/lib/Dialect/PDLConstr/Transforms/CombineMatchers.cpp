@@ -757,7 +757,7 @@ namespace {
 static bool isPureNavigationOp(Operation *op) {
   return isa<GetOperandOp, GetOperandsOp, GetResultOp, GetResultsOp,
              GetAttributeOp, GetDefiningOpOp, GetValueTypeOp,
-             GetAttributeTypeOp, GetUsersOp>(op);
+             GetAttributeTypeOp, GetUsersOp, ExtractOp>(op);
 }
 
 /// Walk up from `u` until reaching the operation that sits directly in

@@ -516,13 +516,12 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
   TypeSwitch<Operation *>(value.getDefiningOp())
       .Case([&](pdl::OperationOp operationOp) {
         // `get_users` requires a single `!pdl.value`. If `pos` is a range,
-        // extract a representative element first. We reuse `pdl_interp.extract`
-        // for this small piece because `pdl_constr` does not provide its own
-        // extract op; the `pdl_constr -> pdl_interp` lowering will leave this
-        // op unchanged.
+        // extract a representative element first using `pdl_constr.extract`;
+        // the `pdl_constr -> pdl_interp` lowering emits the matching
+        // `pdl_interp.extract`.
         Value userPos = pos;
         if (isa<pdl::RangeType>(pos.getType()))
-          userPos = pdl_interp::ExtractOp::create(builder, loc, pos, 0);
+          userPos = pdl_constr::ExtractOp::create(builder, loc, pos, 0);
 
         // Get users and iterate.
         Value usersVal = pdl_constr::GetUsersOp::create(

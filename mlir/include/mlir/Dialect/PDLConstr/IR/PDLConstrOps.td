@@ -312,6 +312,43 @@ def PDLConstr_GetUsersOp : PDLConstr_Op<"get_users", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// pdl_constr::ExtractOp
+//===----------------------------------------------------------------------===//
+
+def PDLConstr_ExtractOp
+    : PDLConstr_Op<"extract", [Pure,
+     TypesMatchWith<
+        "`range` is a PDL range whose element type matches type of `result`",
+        "result", "range", "pdl::RangeType::get($_self)">]> {
+  let summary = "Extract the item at the specified index in a range";
+  let description = [{
+    `pdl_constr.extract` extracts an item from a range at the specified index,
+    mirroring `pdl_interp.extract`. If the index is out of range, the result is
+    null. It lowers directly to `pdl_interp.extract`.
+
+    Example:
+
+    ```mlir
+    // Extract the value at index 0 from a range of values.
+    %v = pdl_constr.extract 0 of %values : !pdl.value
+    ```
+  }];
+
+  let arguments = (ins PDL_RangeOf<PDL_AnyType>:$range,
+                       ConfinedAttr<I32Attr, [IntNonNegative]>:$index);
+  let results = (outs PDL_AnyType:$result);
+  let assemblyFormat = "$index `of` $range `:` type($result) attr-dict";
+
+  let builders = [
+    OpBuilder<(ins "Value":$range, "unsigned":$index), [{
+      build($_builder, $_state,
+            ::llvm::cast<pdl::RangeType>(range.getType()).getElementType(),
+            range, index);
+    }]>,
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // pdl_constr::GetEachOp
 //===----------------------------------------------------------------------===//
 
