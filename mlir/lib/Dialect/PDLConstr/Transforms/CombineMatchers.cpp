@@ -871,8 +871,25 @@ void Combiner::sinkNavigationOps(Region &region) {
       auto [block, before] = computeSinkTarget(op);
       if (!before)
         continue;
-      if (op->getBlock() == block && op->getNextNode() == before)
-        continue;
+      // The op is already sunk far enough when it is in the target block and
+      // only other navigation ops lie between it and its first use: the real
+      // (control-flow-bearing) tests are all above it, and the relative order
+      // among sibling navigation ops that share a use is irrelevant. Checking
+      // for an exact "immediately before" position instead would make two
+      // navigation ops that feed the same use leapfrog each other forever.
+      if (op->getBlock() == block) {
+        bool needMove = false;
+        for (Operation *cur = op->getNextNode(); cur != before;
+             cur = cur->getNextNode()) {
+          assert(cur && "first use must come after the navigation op");
+          if (!isPureNavigationOp(cur)) {
+            needMove = true;
+            break;
+          }
+        }
+        if (!needMove)
+          continue;
+      }
       op->moveBefore(before);
       changed = true;
     }
