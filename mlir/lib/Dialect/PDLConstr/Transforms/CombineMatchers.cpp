@@ -325,45 +325,58 @@ static void stableTopologicalSort(Iterator begin, Iterator end, Compare cmp) {
 }
 
 /// Infers the equivalent PDL Position::Kind integer of the given value.
+/// Numeric values match `Predicates::Kind` in
+/// mlir/lib/Conversion/PDLToPDLInterp/Predicate.h so that tie-breaking in the
+/// cost comparator matches the original pass byte-for-byte.
 static unsigned getPosKind(Value val) {
+  // The matcher root block argument is the canonical root operation.
   if (isa<BlockArgument>(val))
-    return 5u; // Operation
+    return 0u; // OperationPos
 
   Operation *def = val.getDefiningOp();
   if (!def)
-    return 10u; // Unknown
+    return 12u; // sentinel above all real kinds
 
   return TypeSwitch<Operation *, unsigned>(def)
-      .Case<GetAttributeOp>([](auto) { return 0u; /* Attribute */ })
-      .Case<ApplyNativeConstraintOp>([](auto) { return 1u; /* Constraint */ })
-      .Case<GetEachOp>([](auto) { return 2u; /* ForEach */ })
-      .Case<GetOperandsOp>([](auto) { return 3u; /* OperandGroup */ })
-      .Case<GetOperandOp>([](auto) { return 4u; /* Operand */ })
-      .Case<GetDefiningOpOp>([](auto) { return 5u; /* Operation */ })
-      .Case<GetResultsOp>([](auto) { return 6u; /* ResultGroup */ })
-      .Case<GetResultOp>([](auto) { return 7u; /* Result */ })
-      .Case<GetValueTypeOp, GetAttributeTypeOp>([](auto) { return 8u; /* Type */ })
-      .Case<GetUsersOp>([](auto) { return 9u; /* Users */ })
-      .Default([](Operation *) { return 10u; /* Unknown */ });
+      .Case<GetDefiningOpOp>([](auto) { return 0u; /* OperationPos */ })
+      .Case<GetOperandOp>([](auto) { return 1u; /* OperandPos */ })
+      .Case<GetOperandsOp>([](auto) { return 2u; /* OperandGroupPos */ })
+      .Case<GetAttributeOp>([](auto) { return 3u; /* AttributePos */ })
+      .Case<ApplyNativeConstraintOp>(
+          [](auto) { return 4u; /* ConstraintResultPos */ })
+      .Case<GetResultOp>([](auto) { return 5u; /* ResultPos */ })
+      .Case<GetResultsOp>([](auto) { return 6u; /* ResultGroupPos */ })
+      .Case<GetValueTypeOp, GetAttributeTypeOp>(
+          [](auto) { return 7u; /* TypePos */ })
+      // AttributeLiteralPos = 8 / TypeLiteralPos = 9 not represented in
+      // pdl_constr yet — extend here if/when literal accessor ops are added.
+      .Case<GetUsersOp>([](auto) { return 10u; /* UsersPos */ })
+      .Case<GetEachOp>([](auto) { return 11u; /* ForEachPos */ })
+      .Default([](Operation *) { return 12u; /* unknown */ });
 }
 
 /// Infers the equivalent PDL Qualifier::Kind integer of the given op.
-/// Accessors return 0 so they naturally sort before predicates that use them.
+/// Numeric values match the question half of `Predicates::Kind` in
+/// mlir/lib/Conversion/PDLToPDLInterp/Predicate.h. Accessor ops return 0 so
+/// they naturally sort before any real predicate (all of which are >= 12).
 static unsigned getQuestKind(Operation *op) {
   return TypeSwitch<Operation *, unsigned>(op)
-      .Case<HasAttrValueOp>([](auto) { return 1u; /* Attribute */ })
-      .Case<ApplyNativeConstraintOp>([](auto) { return 2u; /* Constraint */ })
-      .Case<EqualOp>([](auto) { return 3u; /* EqualTo */ })
-      .Case<IsNotNullOp>([](auto) { return 4u; /* IsNotNull */ })
+      .Case<IsNotNullOp>([](auto) { return 12u; /* IsNotNullQuestion */ })
+      .Case<HasNameOp>([](auto) { return 13u; /* OperationNameQuestion */ })
+      .Case<HasTypeOp, HasTypesOp>([](auto) { return 14u; /* TypeQuestion */ })
+      .Case<HasAttrValueOp>([](auto) { return 15u; /* AttributeQuestion */ })
       .Case<CheckOperandCountOp>([](auto countOp) {
-        return countOp.getAtLeast() ? 5u : 6u; /* OperandCountAtLeast vs OperandCount */
+        // OperandCountAtLeastQuestion = 16, OperandCountQuestion = 17.
+        return countOp.getAtLeast() ? 16u : 17u;
       })
-      .Case<HasNameOp>([](auto) { return 7u; /* OperationName */ })
       .Case<CheckResultCountOp>([](auto countOp) {
-        return countOp.getAtLeast() ? 8u : 9u; /* ResultCountAtLeast vs ResultCount */
+        // ResultCountAtLeastQuestion = 18, ResultCountQuestion = 19.
+        return countOp.getAtLeast() ? 18u : 19u;
       })
-      .Case<HasTypeOp, HasTypesOp>([](auto) { return 10u; /* Type */ })
-      .Default([](Operation *) { return 0u; /* Accessor */ });
+      .Case<EqualOp>([](auto) { return 20u; /* EqualToQuestion */ })
+      .Case<ApplyNativeConstraintOp>(
+          [](auto) { return 21u; /* ConstraintQuestion */ })
+      .Default([](Operation *) { return 0u; /* accessor — sorts first */ });
 }
 
 /// Recursively computes the OperationDepth by walking the SSA use-def chain.
@@ -393,7 +406,7 @@ static unsigned getOperationDepth(Value val, DenseMap<Value, unsigned> &cache) {
         unsigned parentDepth = getOperationDepth(op->getOperand(0), cache);
 
         // Reaching a new structural Operation boundary increments the depth.
-        if (getPosKind(val) == 5 /* Operation */)
+        if (getPosKind(val) == 0 /* OperationPos */)
           return cache[val] = parentDepth + 1;
 
         return cache[val] = parentDepth;
@@ -430,12 +443,12 @@ static unsigned getPredicatePosKind(Operation *op, DenseMap<Value, unsigned> &ca
           }
         }
         if (maxVal) return getPosKind(maxVal);
-        return 10u; // Unknown
+        return 12u; // sentinel past all position kinds
       })
       .Default([&](Operation *defaultOp) {
         if (defaultOp->getNumOperands() > 0)
           return getPosKind(defaultOp->getOperand(0));
-        return 10u; // Unknown
+        return 12u; // sentinel past all position kinds
       });
 }
 
