@@ -164,6 +164,7 @@ private:
   LogicalResult lowerGetValueType(GetValueTypeOp op);
   LogicalResult lowerGetAttributeType(GetAttributeTypeOp op);
   LogicalResult lowerGetUsers(GetUsersOp op);
+  LogicalResult lowerExtract(ExtractOp op);
 
   // get_each → foreach loop
   LogicalResult lowerGetEach(GetEachOp op);
@@ -321,6 +322,7 @@ LogicalResult Lowerer::lowerOp(Operation *op) {
       .Case<GetValueTypeOp>([&](auto o) { return lowerGetValueType(o); })
       .Case<GetAttributeTypeOp>([&](auto o) { return lowerGetAttributeType(o); })
       .Case<GetUsersOp>([&](auto o) { return lowerGetUsers(o); })
+      .Case<ExtractOp>([&](auto o) { return lowerExtract(o); })
       .Case<GetEachOp>([&](auto o) { return lowerGetEach(o); })
       .Case<IsNotNullOp>([&](auto o) { return lowerIsNotNull(o); })
       .Case<HasNameOp>([&](auto o) { return lowerHasName(o); })
@@ -541,6 +543,14 @@ LogicalResult Lowerer::lowerGetUsers(GetUsersOp op) {
   builder.setInsertionPointToEnd(currentBlock);
   Value v = pdl_interp::GetUsersOp::create(builder, op.getLoc(),
                                            lookup(op.getValue()));
+  map(op.getResult(), v);
+  return success();
+}
+
+LogicalResult Lowerer::lowerExtract(ExtractOp op) {
+  builder.setInsertionPointToEnd(currentBlock);
+  Value v = pdl_interp::ExtractOp::create(
+      builder, op.getLoc(), lookup(op.getRange()), op.getIndex());
   map(op.getResult(), v);
   return success();
 }
