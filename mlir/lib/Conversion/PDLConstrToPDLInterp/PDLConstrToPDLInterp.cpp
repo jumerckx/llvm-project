@@ -187,6 +187,13 @@ private:
   /// The set of `!pdl.operation` values defined on the current path; used
   /// as the `loc()` operand list of `pdl_interp.record_match`.
   llvm::SmallSetVector<Value, 4> locOps;
+
+  /// Static operation names established on the current path, keyed by the
+  /// mapped `pdl_interp` `!pdl.operation` value. Populated by `has_name`
+  /// (and by `switch_op_name` case regions). Used to recover the optional
+  /// `rootKind` of `pdl_interp.record_match`, mirroring the original
+  /// `pdl -> pdl_interp` lowering.
+  llvm::DenseMap<Value, StringAttr> opNameMap;
 };
 
 } // namespace
@@ -245,7 +252,9 @@ LogicalResult Lowerer::lowerMatcher(MatcherOp matcher, Block *entry,
   size_t savedLocSize = locOps.size();
   recordLocOp(funcRoot);
 
-  // Set up emission state for this matcher.
+  // Set up emission state for this matcher. Op names are path-local; the
+  // shared root value would otherwise carry a name across matchers.
+  opNameMap.clear();
   currentBlock = entry;
   failureBlock = failureBB;
 
@@ -350,15 +359,23 @@ LogicalResult Lowerer::lowerSwitchOpName(SwitchOpNameOp op) {
 
   Block *outerCurrent = currentBlock;
   Block *outerFailure = failureBlock;
-  for (Region &caseRegion : op.getCaseRegions()) {
+  for (auto [caseRegion, caseName] :
+       llvm::zip(op.getCaseRegions(), op.getCaseNames())) {
     Block *caseBlock = newBlock();
     caseBlocks.push_back(caseBlock);
 
     size_t savedLocSize = locOps.size();
     currentBlock = caseBlock;
     failureBlock = outerFailure;
+    // Within this case region the switched op is known to have `caseName`.
+    StringAttr savedName = opNameMap.lookup(mappedOp);
+    opNameMap[mappedOp] = llvm::cast<StringAttr>(caseName);
     if (failed(lowerRegion(caseRegion)))
       return failure();
+    if (savedName)
+      opNameMap[mappedOp] = savedName;
+    else
+      opNameMap.erase(mappedOp);
     while (locOps.size() > savedLocSize)
       locOps.pop_back();
   }
@@ -559,10 +576,14 @@ LogicalResult Lowerer::lowerIsNotNull(IsNotNullOp op) {
 
 LogicalResult Lowerer::lowerHasName(HasNameOp op) {
   Block *successBB = newBlock();
+  Value mappedOp = lookup(op.getOp());
   builder.setInsertionPointToEnd(currentBlock);
-  pdl_interp::CheckOperationNameOp::create(
-      builder, op.getLoc(), lookup(op.getOp()), op.getNameAttr(), successBB,
-      failureBlock);
+  pdl_interp::CheckOperationNameOp::create(builder, op.getLoc(), mappedOp,
+                                           op.getNameAttr(), successBB,
+                                           failureBlock);
+  // Remember the static name established for this op so that a subsequent
+  // `success` on the same path can recover the `record_match` root kind.
+  opNameMap[mappedOp] = op.getNameAttr();
   currentBlock = successBB;
   return success();
 }
@@ -666,16 +687,15 @@ LogicalResult Lowerer::lowerSuccess(SuccessOp op) {
   for (Value v : op.getInputs())
     inputs.push_back(lookup(v));
 
-  // Resolve the rewriter symbol to determine the root kind and the list of
-  // generated ops. The rewriter is a `pdl_interp.func` in the rewriter
-  // module (typically created by `convert-pdl-to-pdl-constr`).
-  StringAttr rootKindAttr;
   ArrayAttr generatedOpsAttr;
 
-  // Best-effort root kind: if the first input is an `!pdl.operation` and
-  // we know its `pdl_interp.get_*`-produced parent, we cannot easily
-  // recover the static op name here. We leave it empty: `record_match`'s
-  // `rootKind` is optional and used only for diagnostics / filtering.
+  // Recover the optional root kind: the matcher's root is the function's
+  // sole block argument; if a `has_name` (or `switch_op_name` case) on the
+  // current path established its static op name, use that for the
+  // `record_match` root kind, mirroring the original `pdl -> pdl_interp`
+  // lowering.
+  Value funcRoot = matcherFunc.front().getArgument(0);
+  StringAttr rootKindAttr = opNameMap.lookup(funcRoot);
 
   SmallVector<Value, 4> matchedOps(locOps.begin(), locOps.end());
 
