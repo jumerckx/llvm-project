@@ -371,16 +371,19 @@ LogicalResult Lowerer::lowerSwitchOpName(SwitchOpNameOp op) {
 
   // Lower each case region into its own block. Each case body inherits the
   // current failure scope.
-  SmallVector<Block *, 4> caseBlocks;
-  caseBlocks.reserve(op.getCaseRegions().size());
-
   Block *outerCurrent = currentBlock;
   Block *outerFailure = failureBlock;
-  for (auto [caseRegion, caseName] :
-       llvm::zip(op.getCaseRegions(), op.getCaseNames())) {
-    Block *caseBlock = newBlock();
-    caseBlocks.push_back(caseBlock);
 
+  // Create all case blocks up front, while `currentBlock` is still the (valid)
+  // outer block. Deferring creation into the loop below would assert once a
+  // case region ends in a terminator (which nulls `currentBlock`).
+  SmallVector<Block *, 4> caseBlocks;
+  caseBlocks.reserve(op.getCaseRegions().size());
+  for (size_t i = 0, e = op.getCaseRegions().size(); i < e; ++i)
+    caseBlocks.push_back(newBlock());
+
+  for (auto [caseRegion, caseName, caseBlock] :
+       llvm::zip(op.getCaseRegions(), op.getCaseNames(), caseBlocks)) {
     size_t savedLocSize = locOps.size();
     currentBlock = caseBlock;
     failureBlock = outerFailure;
@@ -419,15 +422,19 @@ LogicalResult Lowerer::lowerSwitchOpName(SwitchOpNameOp op) {
 LogicalResult Lowerer::lowerSwitchType(SwitchTypeOp op) {
   Value mappedTy = lookup(op.getTypeValue());
 
-  SmallVector<Block *, 4> caseBlocks;
-  caseBlocks.reserve(op.getCaseRegions().size());
-
   Block *outerCurrent = currentBlock;
   Block *outerFailure = failureBlock;
-  for (Region &caseRegion : op.getCaseRegions()) {
-    Block *caseBlock = newBlock();
-    caseBlocks.push_back(caseBlock);
 
+  // Create all case blocks up front, while `currentBlock` is still the (valid)
+  // outer block. Deferring creation into the loop below would assert once a
+  // case region ends in a terminator (which nulls `currentBlock`).
+  SmallVector<Block *, 4> caseBlocks;
+  caseBlocks.reserve(op.getCaseRegions().size());
+  for (size_t i = 0, e = op.getCaseRegions().size(); i < e; ++i)
+    caseBlocks.push_back(newBlock());
+
+  for (auto [caseRegion, caseBlock] :
+       llvm::zip(op.getCaseRegions(), caseBlocks)) {
     size_t savedLocSize = locOps.size();
     currentBlock = caseBlock;
     failureBlock = outerFailure;
