@@ -100,8 +100,25 @@ private:
   /// and / or `failureBlock`.
   LogicalResult lowerOp(Operation *op);
 
-  /// Append a new empty block to the matcher function.
+  /// Append a new empty block to the region that currently holds the emission
+  /// point. This is the function body at top level, but a `pdl_interp.foreach`
+  /// body region once we are lowering inside a `get_each` loop (mirroring the
+  /// original `pdl -> pdl_interp` lowering, which creates new blocks in
+  /// `currentBlock->getParent()`). Creating the block in the function body
+  /// unconditionally would make tests inside a loop branch to a block in
+  /// another region.
   Block *newBlock() {
+    assert(currentBlock && "no current block to derive the region from");
+    Block *block = new Block();
+    currentBlock->getParent()->push_back(block);
+    return block;
+  }
+
+  /// Append a new empty block directly to the matcher function's top-level
+  /// region. Used for blocks that must live at function scope regardless of
+  /// the current emission point (the finalize block and per-matcher failure
+  /// entries).
+  Block *newFuncBlock() {
     Block *block = new Block();
     matcherFunc.getBody().push_back(block);
     return block;
@@ -214,7 +231,7 @@ static Type unwrapOptional(Type type) {
 
 LogicalResult Lowerer::lower(ArrayRef<MatcherOp> matchers) {
   // Create the finalize block at the end of the function.
-  Block *finalize = newBlock();
+  Block *finalize = newFuncBlock();
   builder.setInsertionPointToEnd(finalize);
   pdl_interp::FinalizeOp::create(builder, matcherFunc.getLoc());
 
@@ -224,7 +241,7 @@ LogicalResult Lowerer::lower(ArrayRef<MatcherOp> matchers) {
   // entry block. The last matcher's failure is the finalize block.
   Block *currentEntry = &matcherFunc.front();
   for (size_t i = 0, e = matchers.size(); i < e; ++i) {
-    Block *failureEntry = (i + 1 == e) ? finalize : newBlock();
+    Block *failureEntry = (i + 1 == e) ? finalize : newFuncBlock();
     if (failed(lowerMatcher(matchers[i], currentEntry, failureEntry)))
       return failure();
     currentEntry = failureEntry;
