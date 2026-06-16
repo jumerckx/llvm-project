@@ -82,12 +82,6 @@ struct PoolKey {
 namespace llvm {
 template <>
 struct DenseMapInfo<PoolKey> {
-  static PoolKey getEmptyKey() {
-    return {DenseMapInfo<OperationName>::getEmptyKey(), nullptr, {}};
-  }
-  static PoolKey getTombstoneKey() {
-    return {DenseMapInfo<OperationName>::getTombstoneKey(), nullptr, {}};
-  }
   static unsigned getHashValue(const PoolKey &k) {
     return llvm::hash_combine(
         k.name, k.attrs,
