@@ -20,12 +20,20 @@
 #define MLIR_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H
 
 #include "mlir/IR/Value.h"
+#include "mlir/IR/ValueRange.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include <functional>
+#include <optional>
 #include <vector>
 
 namespace mlir {
+namespace pdl {
+class OperationOp;
+class PatternOp;
+} // namespace pdl
+
 namespace pdl_to_pdl_interp {
 
 /// The information associated with an edge in the cost graph. Each node in
@@ -130,6 +138,46 @@ private:
   /// cyclical) result in the optimal branching algorithm.
   DenseMap<Value, Value> parents;
 };
+
+//===----------------------------------------------------------------------===//
+// Shared PDL pattern helpers
+//
+// Infrastructure for detecting the candidate roots of a `pdl.pattern` and
+// building the root-ordering cost graph from them. This is shared by the
+// PDL -> PDLInterp and PDL -> PDLConstr lowerings, which differ only in the
+// emission backend driven by the resulting ordering.
+//===----------------------------------------------------------------------===//
+
+/// An op accepting a value at an optional index.
+struct OpIndex {
+  Value parent;
+  std::optional<unsigned> index;
+};
+
+/// The parent and operand index of each operation for each root, stored
+/// as a nested map [root][operation].
+using ParentMaps = DenseMap<Value, DenseMap<Value, OpIndex>>;
+
+/// Returns the number of non-range elements within `values`.
+unsigned getNumNonRangeValues(ValueRange values);
+
+/// Returns true if the operand at the given index needs to be queried using an
+/// operand group, i.e., if it is variadic itself or follows a variadic operand.
+bool useOperandGroup(pdl::OperationOp op, unsigned index);
+
+/// Given a pattern, determines the set of roots present in this pattern.
+/// These are the operations whose results are not consumed by other operations.
+SmallVector<Value> detectRoots(pdl::PatternOp pattern);
+
+/// Given a list of candidate roots, builds the cost graph for connecting them.
+/// The graph is formed by traversing the DAG of operations starting from each
+/// root and marking the depth of each connector value (operand). Then we join
+/// the candidate roots based on the common connector values, taking the one
+/// with the minimum depth. Along the way, we compute, for each candidate root,
+/// a mapping from each operation (in the DAG underneath this root) to its
+/// parent operation and the corresponding operand index.
+void buildCostGraph(ArrayRef<Value> roots, RootOrderingGraph &graph,
+                    ParentMaps &parentMaps);
 
 } // namespace pdl_to_pdl_interp
 } // namespace mlir
