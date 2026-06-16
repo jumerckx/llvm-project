@@ -37,11 +37,8 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-#include <queue>
 
 namespace mlir {
 #define GEN_PASS_DEF_CONVERTPDLTOPDLCONSTRPASS
@@ -53,129 +50,22 @@ using namespace mlir;
 #define DEBUG_TYPE "convert-pdl-to-pdl-constr"
 
 //===----------------------------------------------------------------------===//
-// Helper: Root detection and cost graph (reused from PredicateTree.cpp)
+// Shared helpers
+//
+// Root detection and cost-graph construction are shared with the
+// PDL -> PDLInterp lowering and live in the `PDLToPDLInterp` library (see
+// `RootOrdering.h`); only the emission backend below differs.
 //===----------------------------------------------------------------------===//
 
-namespace {
-
-/// An op accepting a value at an optional index.
-struct OpIndex {
-  Value parent;
-  std::optional<unsigned> index;
-};
-
-/// The parent and operand index of each operation for each root.
-using ParentMaps = DenseMap<Value, DenseMap<Value, OpIndex>>;
-
-} // namespace
-
+using pdl_to_pdl_interp::buildCostGraph;
+using pdl_to_pdl_interp::detectRoots;
+using pdl_to_pdl_interp::getNumNonRangeValues;
+using pdl_to_pdl_interp::OpIndex;
 using pdl_to_pdl_interp::OptimalBranching;
+using pdl_to_pdl_interp::ParentMaps;
 using pdl_to_pdl_interp::RootOrderingEntry;
 using pdl_to_pdl_interp::RootOrderingGraph;
-
-/// Returns the number of non-range elements within `values`.
-static unsigned getNumNonRangeValues(ValueRange values) {
-  return llvm::count_if(values.getTypes(),
-                        [](Type type) { return !isa<pdl::RangeType>(type); });
-}
-
-/// Returns true if the operand at the given index needs to use an operand
-/// group (variadic operand at or before that index).
-static bool useOperandGroup(pdl::OperationOp op, unsigned index) {
-  OperandRange operands = op.getOperandValues();
-  assert(index < operands.size() && "operand index out of range");
-  for (unsigned i = 0; i <= index; ++i)
-    if (isa<pdl::RangeType>(operands[i].getType()))
-      return true;
-  return false;
-}
-
-static SmallVector<Value> detectRoots(pdl::PatternOp pattern) {
-  DenseSet<Value> used;
-  for (auto operationOp : pattern.getBodyRegion().getOps<pdl::OperationOp>()) {
-    for (Value operand : operationOp.getOperandValues())
-      TypeSwitch<Operation *>(operand.getDefiningOp())
-          .Case<pdl::ResultOp, pdl::ResultsOp>(
-              [&used](auto resultOp) { used.insert(resultOp.getParent()); });
-  }
-  if (Value root = pattern.getRewriter().getRoot())
-    used.erase(root);
-
-  SmallVector<Value> roots;
-  for (Value operationOp : pattern.getBodyRegion().getOps<pdl::OperationOp>())
-    if (!used.contains(operationOp))
-      roots.push_back(operationOp);
-  return roots;
-}
-
-static void buildCostGraph(ArrayRef<Value> roots, RootOrderingGraph &graph,
-                           ParentMaps &parentMaps) {
-  struct Entry {
-    Value value;
-    Value parent;
-    std::optional<unsigned> index;
-    unsigned depth;
-  };
-  struct RootDepth {
-    Value root;
-    unsigned depth = 0;
-  };
-
-  llvm::MapVector<Value, SmallVector<RootDepth, 1>> connectorsRootsDepths;
-
-  for (Value root : roots) {
-    std::queue<Entry> toVisit;
-    toVisit.push({root, Value(), std::nullopt, 0});
-    DenseMap<Value, OpIndex> &parentMap = parentMaps[root];
-
-    while (!toVisit.empty()) {
-      Entry entry = toVisit.front();
-      toVisit.pop();
-      if (!parentMap.insert({entry.value, {entry.parent, entry.index}}).second)
-        continue;
-      connectorsRootsDepths[entry.value].push_back({root, entry.depth});
-
-      TypeSwitch<Operation *>(entry.value.getDefiningOp())
-          .Case([&](pdl::OperationOp operationOp) {
-            OperandRange operands = operationOp.getOperandValues();
-            if (operands.size() == 1 &&
-                isa<pdl::RangeType>(operands[0].getType())) {
-              toVisit.push({operands[0], entry.value, std::nullopt,
-                            entry.depth + 1});
-              return;
-            }
-            for (const auto &p : llvm::enumerate(operands))
-              toVisit.push(
-                  {p.value(), entry.value, p.index(), entry.depth + 1});
-          })
-          .Case<pdl::ResultOp, pdl::ResultsOp>([&](auto resultOp) {
-            toVisit.push({resultOp.getParent(), entry.value,
-                          resultOp.getIndex(), entry.depth});
-          });
-    }
-  }
-
-  unsigned nextID = 0;
-  for (const auto &connectorRootsDepths : connectorsRootsDepths) {
-    Value value = connectorRootsDepths.first;
-    ArrayRef<RootDepth> rootsDepths = connectorRootsDepths.second;
-    if (rootsDepths.size() == 1)
-      continue;
-    for (const RootDepth &p : rootsDepths) {
-      for (const RootDepth &q : rootsDepths) {
-        if (&p == &q)
-          continue;
-        RootOrderingEntry &entry = graph[q.root][p.root];
-        if (!entry.connector || entry.cost.first > q.depth) {
-          if (!entry.connector)
-            entry.cost.second = nextID++;
-          entry.cost.first = q.depth;
-          entry.connector = value;
-        }
-      }
-    }
-  }
-}
+using pdl_to_pdl_interp::useOperandGroup;
 
 //===----------------------------------------------------------------------===//
 // PDL → pdl_constr Emitter
