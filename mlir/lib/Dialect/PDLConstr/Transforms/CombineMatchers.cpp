@@ -112,11 +112,6 @@ struct MatcherInfo {
 
 //===----------------------------------------------------------------------===//
 // TreeNode: in-memory failure spine, materialized into IR at the end.
-//
-// The failure spine is genuine transient algorithm state (it represents the
-// shape of `try` alternatives we are *going to* emit), not a shadow of
-// existing IR, so it stays in memory. Its contents are SSA-native: each
-// node references the canonical pool op / pool Values directly.
 //===----------------------------------------------------------------------===//
 
 struct TreeNode {
