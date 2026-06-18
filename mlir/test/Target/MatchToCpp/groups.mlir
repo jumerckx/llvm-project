@@ -1,4 +1,4 @@
-// RUN: mlir-translate --pdl-constr-to-cpp %s | FileCheck %s
+// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
 
 // Indexed result group -> std::optional<ValueRange> via the emitted
 // __pdl_get_group helper, unwrapped by is_not_null into a bare ValueRange.
@@ -8,10 +8,10 @@ module {
     module @r {}
   }
 
-  pdl_constr.matcher @m root(%root : !pdl.operation) {
-    %0 = pdl_constr.get_results 1 of %root : !pdl_constr.optional<!pdl.range<value>>
-    %1 = pdl_constr.is_not_null %0 : !pdl_constr.optional<!pdl.range<value>> -> !pdl.range<value>
-    pdl_constr.success @rewriters::@r benefit(1) (%root, %1 : !pdl.operation, !pdl.range<value>)
+  match.matcher @m root(%root : !pdl.operation) {
+    %0 = match.get_results 1 of %root : !match.optional<!pdl.range<value>>
+    %1 = match.is_not_null %0 : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    match.success @rewriters::@r benefit(1) (%root, %1 : !pdl.operation, !pdl.range<value>)
   }
 }
 

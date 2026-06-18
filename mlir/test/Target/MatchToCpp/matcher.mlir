@@ -1,4 +1,4 @@
-// RUN: mlir-translate --pdl-constr-to-cpp %s | FileCheck %s
+// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
 
 // A flat matcher: op-name + operand-count tests, one navigation, one success.
 
@@ -9,12 +9,12 @@ module {
     module @addf {}
   }
 
-  pdl_constr.matcher @addf_matcher root(%root : !pdl.operation) {
-    pdl_constr.has_name %root, "arith.addf"
-    pdl_constr.check_operand_count %root is 2
-    %0 = pdl_constr.get_operand 0 of %root : !pdl_constr.optional<!pdl.value>
-    %1 = pdl_constr.is_not_null %0 : !pdl_constr.optional<!pdl.value> -> !pdl.value
-    pdl_constr.success @rewriters::@addf benefit(1) (%root, %1 : !pdl.operation, !pdl.value)
+  match.matcher @addf_matcher root(%root : !pdl.operation) {
+    match.has_name %root, "arith.addf"
+    match.check_operand_count %root is 2
+    %0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
+    %1 = match.is_not_null %0 : !match.optional<!pdl.value> -> !pdl.value
+    match.success @rewriters::@addf benefit(1) (%root, %1 : !pdl.operation, !pdl.value)
   }
 }
 
