@@ -1133,9 +1133,9 @@ def ConvertOpenMPToLLVMPass : Pass<"convert-openmp-to-llvm", "ModuleOp"> {
 // PDLToPDLInterp
 //===----------------------------------------------------------------------===//
 
-def ConvertPDLToPDLConstrPass : Pass<"convert-pdl-to-pdl-constr", "ModuleOp"> {
+def ConvertPDLToMatchPass : Pass<"convert-pdl-to-match", "ModuleOp"> {
   let summary = "Convert PDL ops to PDL constraint ops";
-  let dependentDialects = ["pdl_constr::PDLConstrDialect", "pdl::PDLDialect", "pdl_interp::PDLInterpDialect"];
+  let dependentDialects = ["match::MatchDialect", "pdl::PDLDialect", "pdl_interp::PDLInterpDialect"];
 }
 
 def ConvertPDLToPDLInterpPass : Pass<"convert-pdl-to-pdl-interp", "ModuleOp"> {
@@ -1143,15 +1143,15 @@ def ConvertPDLToPDLInterpPass : Pass<"convert-pdl-to-pdl-interp", "ModuleOp"> {
   let dependentDialects = ["pdl_interp::PDLInterpDialect"];
 }
 
-def ConvertPDLConstrToPDLInterpPass
-    : Pass<"convert-pdl-constr-to-pdl-interp", "ModuleOp"> {
-  let summary = "Combine pdl_constr patterns and lower them to pdl_interp";
+def ConvertMatchToPDLInterpPass
+    : Pass<"convert-match-to-pdl-interp", "ModuleOp"> {
+  let summary = "Combine match patterns and lower them to pdl_interp";
   let description = [{
-    Combines all `pdl_constr.pattern` ops in a module into a single shared
+    Combines all `match.pattern` ops in a module into a single shared
     matcher tree and emits the corresponding `pdl_interp` matcher function.
-    The rewriter functions referenced from `pdl_constr.success` are assumed
+    The rewriter functions referenced from `match.success` are assumed
     to already exist in the nested rewriter module (typically produced by
-    `convert-pdl-to-pdl-constr`).
+    `convert-pdl-to-match`).
   }];
   let dependentDialects = ["pdl_interp::PDLInterpDialect"];
 }

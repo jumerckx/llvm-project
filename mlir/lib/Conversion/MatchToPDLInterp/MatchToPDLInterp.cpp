@@ -1,4 +1,4 @@
-//===- PDLConstrToPDLInterp.cpp - Lower pdl_constr to pdl_interp ----------===//
+//===- MatchToPDLInterp.cpp - Lower match to pdl_interp ----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,12 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Mechanical lowering of `pdl_constr` IR to `pdl_interp` IR.
+// Mechanical lowering of `match` IR to `pdl_interp` IR.
 //
-// The `pdl_constr` dialect is an explicitly ordered IR: tests have an
+// The `match` dialect is an explicitly ordered IR: tests have an
 // implicit failure control effect, OR-of-alternatives is expressed by
-// nested `pdl_constr.try` regions, and multi-way dispatch by
-// `pdl_constr.switch_op_name` / `pdl_constr.switch_type`. Because the
+// nested `match.try` regions, and multi-way dispatch by
+// `match.switch_op_name` / `match.switch_type`. Because the
 // matcher-tree shape is already encoded in the IR, lowering to `pdl_interp`
 // is a mechanical region walker that maintains two pieces of state:
 //
@@ -26,31 +26,31 @@
 //     corresponding `pdl_interp.check_*` / `are_equal` / `is_not_null`
 //     with the failure branch pointing at `failureBlock`.
 //   * Navigation ops lower to the corresponding `pdl_interp.get_*` ops.
-//   * `pdl_constr.try { ... }` creates a fresh "after-try" block; the body
+//   * `match.try { ... }` creates a fresh "after-try" block; the body
 //     is lowered with `failureBlock` set to that block; subsequent siblings
 //     in the parent region are lowered into that block (which is also where
 //     fall-off-end of the body branches).
-//   * `pdl_constr.switch_*` lowers to `pdl_interp.switch_*` with the case
+//   * `match.switch_*` lowers to `pdl_interp.switch_*` with the case
 //     regions lowered into separate blocks and the default set to the
 //     enclosing `failureBlock`. The switch is treated as a terminator: ops
 //     in the parent region after the switch are unreachable and are not
 //     emitted.
-//   * `pdl_constr.get_each` lowers to `pdl_interp.foreach`; subsequent ops
+//   * `match.get_each` lowers to `pdl_interp.foreach`; subsequent ops
 //     in the same region emit inside the loop body, and their failure
 //     branches go to a `pdl_interp.continue` (next iteration). When the
 //     loop exhausts, control transfers to the original `failureBlock`.
-//   * `pdl_constr.success` lowers to `pdl_interp.record_match` whose
+//   * `match.success` lowers to `pdl_interp.record_match` whose
 //     successor is the current `failureBlock`.
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Conversion/PDLConstrToPDLInterp/PDLConstrToPDLInterp.h"
+#include "mlir/Conversion/MatchToPDLInterp/MatchToPDLInterp.h"
 
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstr.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrTypes.h"
+#include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/Match/IR/MatchOps.h"
+#include "mlir/Dialect/Match/IR/MatchTypes.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -62,12 +62,12 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir {
-#define GEN_PASS_DEF_CONVERTPDLCONSTRTOPDLINTERPPASS
+#define GEN_PASS_DEF_CONVERTMATCHTOPDLINTERPPASS
 #include "mlir/Conversion/Passes.h.inc"
 } // namespace mlir
 
 using namespace mlir;
-using namespace mlir::pdl_constr;
+using namespace mlir::match;
 
 namespace {
 
@@ -124,16 +124,16 @@ private:
     return block;
   }
 
-  /// Lookup `v` (a `pdl_constr` SSA value) in the value mapping. Asserts
-  /// when not found, since well-formed `pdl_constr` IR must define a value
+  /// Lookup `v` (a `match` SSA value) in the value mapping. Asserts
+  /// when not found, since well-formed `match` IR must define a value
   /// before use.
   Value lookup(Value v) const {
     Value mapped = valueMap.lookup(v);
-    assert(mapped && "pdl_constr value not mapped");
+    assert(mapped && "match value not mapped");
     return mapped;
   }
 
-  /// Map a `pdl_constr` SSA value to a `pdl_interp` SSA value.
+  /// Map a `match` SSA value to a `pdl_interp` SSA value.
   void map(Value from, Value to) { valueMap.map(from, to); }
 
   /// Record `val` as a possible "location" operation for subsequent
@@ -190,8 +190,8 @@ private:
   OpBuilder builder;
   pdl_interp::FuncOp matcherFunc;
 
-  /// SSA value mapping from `pdl_constr` values to their `pdl_interp`
-  /// counterparts. For `pdl_constr.is_not_null`, both the optional operand
+  /// SSA value mapping from `match` values to their `pdl_interp`
+  /// counterparts. For `match.is_not_null`, both the optional operand
   /// and the unwrapped result map to the same bare `pdl_interp` value.
   IRMapping valueMap;
 
@@ -220,7 +220,7 @@ private:
 // Helpers
 //===----------------------------------------------------------------------===//
 
-/// Returns the inner type of an `!pdl_constr.optional<T>`.
+/// Returns the inner type of an `!match.optional<T>`.
 static Type unwrapOptional(Type type) {
   auto opt = llvm::cast<OptionalType>(type);
   return opt.getInnerType();
@@ -338,7 +338,7 @@ LogicalResult Lowerer::lowerOp(Operation *op) {
           [&](auto o) { return lowerApplyNativeConstraint(o); })
       .Case<SuccessOp>([&](auto o) { return lowerSuccess(o); })
       .Default([&](Operation *o) {
-        return o->emitOpError("unsupported pdl_constr op in lowering");
+        return o->emitOpError("unsupported match op in lowering");
       });
 }
 
@@ -749,13 +749,13 @@ LogicalResult Lowerer::lowerSuccess(SuccessOp op) {
 //===----------------------------------------------------------------------===//
 
 namespace {
-struct PDLConstrToPDLInterpPass
-    : public impl::ConvertPDLConstrToPDLInterpPassBase<
-          PDLConstrToPDLInterpPass> {
+struct MatchToPDLInterpPass
+    : public impl::ConvertMatchToPDLInterpPassBase<
+          MatchToPDLInterpPass> {
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
-    // Collect all top-level `pdl_constr.matcher` ops in source order.
+    // Collect all top-level `match.matcher` ops in source order.
     SmallVector<MatcherOp, 4> matchers;
     for (MatcherOp m : module.getOps<MatcherOp>())
       matchers.push_back(m);
@@ -776,7 +776,7 @@ struct PDLConstrToPDLInterpPass
       return;
     }
 
-    // Erase the lowered `pdl_constr.matcher` ops.
+    // Erase the lowered `match.matcher` ops.
     for (MatcherOp m : matchers)
       m.erase();
   }

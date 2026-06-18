@@ -1,4 +1,4 @@
-//===- PDLToPDLConstr.h - PDL to PDL Constraint conversion ------*- C++ -*-===//
+//===- PDLToMatch.h - PDL to PDL Constraint conversion ------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_CONVERSION_PDLTOPDLCONSTR_PDLTOPDLCONSTR_H
-#define MLIR_CONVERSION_PDLTOPDLCONSTR_PDLTOPDLCONSTR_H
+#ifndef MLIR_CONVERSION_PDLTOMATCH_PDLTOMATCH_H
+#define MLIR_CONVERSION_PDLTOMATCH_PDLTOMATCH_H
 
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
@@ -21,9 +21,9 @@ class ModuleOp;
 template <typename OpT>
 class OperationPass;
 
-#define GEN_PASS_DECL_CONVERTPDLTOPDLCONSTRPASS
+#define GEN_PASS_DECL_CONVERTPDLTOMATCHPASS
 #include "mlir/Conversion/Passes.h.inc"
 
 } // namespace mlir
 
-#endif // MLIR_CONVERSION_PDLTOPDLCONSTR_PDLTOPDLCONSTR_H
+#endif // MLIR_CONVERSION_PDLTOMATCH_PDLTOMATCH_H

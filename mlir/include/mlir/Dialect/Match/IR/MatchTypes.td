@@ -1,4 +1,4 @@
-//===- PDLConstrTypes.td - PDL Constraint types ------------*- tablegen -*-===//
+//===- MatchTypes.td - PDL Constraint types ------------*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,28 +6,28 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTRTYPES
-#define MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTRTYPES
+#ifndef MLIR_DIALECT_MATCH_IR_MATCHTYPES
+#define MLIR_DIALECT_MATCH_IR_MATCHTYPES
 
 include "mlir/IR/AttrTypeBase.td"
-include "mlir/Dialect/PDLConstr/IR/PDLConstrDialect.td"
+include "mlir/Dialect/Match/IR/MatchDialect.td"
 
-class PDLConstr_Type<string name, string typeMnemonic, list<Trait> traits = []>
-    : TypeDef<PDLConstr_Dialect, name, traits> {
+class Match_Type<string name, string typeMnemonic, list<Trait> traits = []>
+    : TypeDef<Match_Dialect, name, traits> {
   let mnemonic = typeMnemonic;
 }
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::OptionalType
+// match::OptionalType
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_Optional : PDLConstr_Type<"Optional", "optional"> {
+def Match_Optional : Match_Type<"Optional", "optional"> {
   let summary = "Optional wrapper for a PDL type";
   let description = [{
     A wrapper type indicating that the contained value may be null at runtime.
-    Navigation ops that can fail return `!pdl_constr.optional<!pdl.operation>`
-    etc. The only way to convert from `!pdl_constr.optional<T>` to `T` is via
-    `pdl_constr.is_not_null`, which additionally has the implicit control
+    Navigation ops that can fail return `!match.optional<!pdl.operation>`
+    etc. The only way to convert from `!match.optional<T>` to `T` is via
+    `match.is_not_null`, which additionally has the implicit control
     effect of failing the surrounding scope when the optional is null.
   }];
   let parameters = (ins "Type":$innerType);
@@ -46,9 +46,9 @@ def PDLConstr_Optional : PDLConstr_Type<"Optional", "optional"> {
 // Type Constraints
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_OptionalType : Type<
-  CPred<"::llvm::isa<::mlir::pdl_constr::OptionalType>($_self)">,
-  "pdl_constr optional type",
-  "::mlir::pdl_constr::OptionalType">;
+def Match_OptionalType : Type<
+  CPred<"::llvm::isa<::mlir::match::OptionalType>($_self)">,
+  "match optional type",
+  "::mlir::match::OptionalType">;
 
-#endif // MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTRTYPES
+#endif // MLIR_DIALECT_MATCH_IR_MATCHTYPES

@@ -1,4 +1,4 @@
-//===- PDLConstrOps.td - PDL Constraint ops ----------------*- tablegen -*-===//
+//===- MatchOps.td - PDL Constraint ops ----------------*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,10 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTROPS
-#define MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTROPS
+#ifndef MLIR_DIALECT_MATCH_IR_MATCHOPS
+#define MLIR_DIALECT_MATCH_IR_MATCHOPS
 
-include "mlir/Dialect/PDLConstr/IR/PDLConstrTypes.td"
+include "mlir/Dialect/Match/IR/MatchTypes.td"
 include "mlir/Dialect/PDL/IR/PDLTypes.td"
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/SymbolInterfaces.td"
@@ -19,21 +19,21 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 // Base class
 //===----------------------------------------------------------------------===//
 
-class PDLConstr_Op<string mnemonic, list<Trait> traits = []>
-    : Op<PDLConstr_Dialect, mnemonic, traits>;
+class Match_Op<string mnemonic, list<Trait> traits = []>
+    : Op<Match_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::MatcherOp
+// match::MatcherOp
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_MatcherOp : PDLConstr_Op<"matcher", [
+def Match_MatcherOp : Match_Op<"matcher", [
     IsolatedFromAbove, SingleBlock, NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>,
     Symbol
   ]> {
   let summary = "Container for the navigation/constraint IR of one matcher";
   let description = [{
-    `pdl_constr.matcher` wraps the navigation, constraint, and matcher-tree
+    `match.matcher` wraps the navigation, constraint, and matcher-tree
     structure for one or more sub-patterns sharing a common matcher graph.
     Its region is a single block whose argument is the root operation.
 
@@ -42,14 +42,14 @@ def PDLConstr_MatcherOp : PDLConstr_Op<"matcher", [
     control to reach that point. The matcher-tree shape (the failure spine)
     is expressed by nested regions:
 
-    * `pdl_constr.try` opens a new failure scope. Failures inside (or
+    * `match.try` opens a new failure scope. Failures inside (or
       fall-off-end) transfer control to the op immediately following the
-      `pdl_constr.try` in its parent region.
-    * `pdl_constr.switch_op_name` / `pdl_constr.switch_type` are
+      `match.try` in its parent region.
+    * `match.switch_op_name` / `match.switch_type` are
       multi-way dispatches; each case region inherits the enclosing failure
       scope as its default.
 
-    A successful sub-pattern match is marked by `pdl_constr.success`, which
+    A successful sub-pattern match is marked by `match.success`, which
     may appear at any depth and carries its own benefit. A matcher therefore
     aggregates multiple logical patterns that share a common navigation /
     test prefix.
@@ -57,15 +57,15 @@ def PDLConstr_MatcherOp : PDLConstr_Op<"matcher", [
     Example:
 
     ```mlir
-    pdl_constr.matcher @combined root(%root : !pdl.operation) {
-      pdl_constr.has_name %root, "arith.addi"
-      pdl_constr.try {
+    match.matcher @combined root(%root : !pdl.operation) {
+      match.has_name %root, "arith.addi"
+      match.try {
         // alternative 1
-        pdl_constr.success @rewriters::@rewrite_a benefit(2)
+        match.success @rewriters::@rewrite_a benefit(2)
       }
-      pdl_constr.try {
+      match.try {
         // alternative 2
-        pdl_constr.success @rewriters::@rewrite_b benefit(1)
+        match.success @rewriters::@rewrite_b benefit(1)
       }
     }
     ```
@@ -90,22 +90,22 @@ def PDLConstr_MatcherOp : PDLConstr_Op<"matcher", [
 }
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::TryOp
+// match::TryOp
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_TryOp : PDLConstr_Op<"try", [
+def Match_TryOp : Match_Op<"try", [
     SingleBlock, NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>
   ]> {
   let summary = "Open a new failure scope";
   let description = [{
-    `pdl_constr.try` introduces a new failure scope. Any test op that fails
+    `match.try` introduces a new failure scope. Any test op that fails
     inside the region, as well as fall-off-end of the region, transfers
-    control to the op immediately following the `pdl_constr.try` in its
+    control to the op immediately following the `match.try` in its
     parent region.
 
     This is the direct IR analogue of `MatcherNode::failureNode`: a chain of
-    sibling `pdl_constr.try` ops at the same region level encodes the OR of
+    sibling `match.try` ops at the same region level encodes the OR of
     alternative match attempts.
 
     The region is a single block with no block arguments. Values defined in
@@ -120,16 +120,16 @@ def PDLConstr_TryOp : PDLConstr_Op<"try", [
 }
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::SwitchOpNameOp
+// match::SwitchOpNameOp
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_SwitchOpNameOp : PDLConstr_Op<"switch_op_name", [
+def Match_SwitchOpNameOp : Match_Op<"switch_op_name", [
     NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>
   ]> {
   let summary = "Multi-way dispatch on operation name";
   let description = [{
-    `pdl_constr.switch_op_name` dispatches on the name of `op`. The op
+    `match.switch_op_name` dispatches on the name of `op`. The op
     carries one case-region per name in `caseNames`. When the runtime name
     matches `caseNames[i]`, control enters the i-th case region. If no case
     matches, control transfers to the enclosing failure scope (the implicit
@@ -143,7 +143,7 @@ def PDLConstr_SwitchOpNameOp : PDLConstr_Op<"switch_op_name", [
     Example:
 
     ```mlir
-    pdl_constr.switch_op_name %op
+    match.switch_op_name %op
     case "arith.addi" {
       // ...
     }
@@ -161,16 +161,16 @@ def PDLConstr_SwitchOpNameOp : PDLConstr_Op<"switch_op_name", [
 }
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::SwitchTypeOp
+// match::SwitchTypeOp
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_SwitchTypeOp : PDLConstr_Op<"switch_type", [
+def Match_SwitchTypeOp : Match_Op<"switch_type", [
     NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>
   ]> {
   let summary = "Multi-way dispatch on a type value";
   let description = [{
-    `pdl_constr.switch_type` dispatches on the runtime value of a `!pdl.type`.
+    `match.switch_type` dispatches on the runtime value of a `!pdl.type`.
     The op carries one case-region per type in `caseTypes`. When the runtime
     type matches `caseTypes[i]`, control enters the i-th case region. If no
     case matches, control transfers to the enclosing failure scope. Each
@@ -179,7 +179,7 @@ def PDLConstr_SwitchTypeOp : PDLConstr_Op<"switch_type", [
     Example:
 
     ```mlir
-    pdl_constr.switch_type %t
+    match.switch_type %t
     case i32 {
       // ...
     }
@@ -197,76 +197,76 @@ def PDLConstr_SwitchTypeOp : PDLConstr_Op<"switch_type", [
 }
 
 //===----------------------------------------------------------------------===//
-// Navigation Ops - Nullable (return !pdl_constr.optional<T>)
+// Navigation Ops - Nullable (return !match.optional<T>)
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_GetOperandOp : PDLConstr_Op<"get_operand", [Pure]> {
+def Match_GetOperandOp : Match_Op<"get_operand", [Pure]> {
   let summary = "Get an operand of an operation (nullable)";
   let description = [{
     Navigates to a specific operand of an operation. Returns
-    `!pdl_constr.optional<!pdl.value>` because the operand may not exist.
+    `!match.optional<!pdl.value>` because the operand may not exist.
   }];
   let arguments = (ins PDL_Operation:$op, I32Attr:$index);
-  let results = (outs PDLConstr_OptionalType:$result);
+  let results = (outs Match_OptionalType:$result);
   let assemblyFormat = "$index `of` $op attr-dict `:` type($result)";
 }
 
-def PDLConstr_GetOperandsOp : PDLConstr_Op<"get_operands", [Pure]> {
+def Match_GetOperandsOp : Match_Op<"get_operands", [Pure]> {
   let summary = "Get a group of operands of an operation (nullable)";
   let description = [{
     Navigates to a group of operands of an operation. Returns
-    `!pdl_constr.optional<!pdl.range<value>>`. If no index is provided,
+    `!match.optional<!pdl.range<value>>`. If no index is provided,
     returns all operands.
   }];
   let arguments = (ins PDL_Operation:$op, OptionalAttr<I32Attr>:$index);
-  let results = (outs PDLConstr_OptionalType:$result);
+  let results = (outs Match_OptionalType:$result);
   let assemblyFormat = "($index^)? `of` $op attr-dict `:` type($result)";
 }
 
-def PDLConstr_GetResultOp : PDLConstr_Op<"get_result", [Pure]> {
+def Match_GetResultOp : Match_Op<"get_result", [Pure]> {
   let summary = "Get a result of an operation (nullable)";
   let description = [{
     Navigates to a specific result of an operation. Returns
-    `!pdl_constr.optional<!pdl.value>` because the result may not exist.
+    `!match.optional<!pdl.value>` because the result may not exist.
   }];
   let arguments = (ins PDL_Operation:$op, I32Attr:$index);
-  let results = (outs PDLConstr_OptionalType:$result);
+  let results = (outs Match_OptionalType:$result);
   let assemblyFormat = "$index `of` $op attr-dict `:` type($result)";
 }
 
-def PDLConstr_GetResultsOp : PDLConstr_Op<"get_results", [Pure]> {
+def Match_GetResultsOp : Match_Op<"get_results", [Pure]> {
   let summary = "Get a group of results of an operation (nullable)";
   let description = [{
     Navigates to a group of results of an operation. Returns
-    `!pdl_constr.optional<!pdl.range<value>>`. If no index is provided,
+    `!match.optional<!pdl.range<value>>`. If no index is provided,
     returns all results.
   }];
   let arguments = (ins PDL_Operation:$op, OptionalAttr<I32Attr>:$index);
-  let results = (outs PDLConstr_OptionalType:$result);
+  let results = (outs Match_OptionalType:$result);
   let assemblyFormat = "($index^)? `of` $op attr-dict `:` type($result)";
 }
 
-def PDLConstr_GetAttributeOp : PDLConstr_Op<"get_attribute", [Pure]> {
+def Match_GetAttributeOp : Match_Op<"get_attribute", [Pure]> {
   let summary = "Get a named attribute of an operation (nullable)";
   let description = [{
     Navigates to a named attribute of an operation. Returns
-    `!pdl_constr.optional<!pdl.attribute>` because the attribute may not exist.
+    `!match.optional<!pdl.attribute>` because the attribute may not exist.
   }];
   let arguments = (ins PDL_Operation:$op, StrAttr:$name);
-  let results = (outs PDLConstr_OptionalType:$result);
+  let results = (outs Match_OptionalType:$result);
   let assemblyFormat = "$name `of` $op attr-dict `:` type($result)";
 }
 
-def PDLConstr_GetDefiningOpOp : PDLConstr_Op<"get_defining_op", [Pure]> {
+def Match_GetDefiningOpOp : Match_Op<"get_defining_op", [Pure]> {
   let summary = "Get the defining operation of a value or value range (nullable)";
   let description = [{
     Navigates to the defining operation of a value. If the input is a
     `!pdl.range<value>`, the defining op of the first value is used. Returns
-    `!pdl_constr.optional<!pdl.operation>` because the value may be a block
+    `!match.optional<!pdl.operation>` because the value may be a block
     argument with no defining op.
   }];
   let arguments = (ins PDL_InstOrRangeOf<PDL_Value>:$value);
-  let results = (outs PDLConstr_OptionalType:$result);
+  let results = (outs Match_OptionalType:$result);
   let assemblyFormat =
       "`of` $value `:` type($value) attr-dict `->` type($result)";
 }
@@ -275,7 +275,7 @@ def PDLConstr_GetDefiningOpOp : PDLConstr_Op<"get_defining_op", [Pure]> {
 // Navigation Ops - Non-nullable (return bare PDL types)
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_GetValueTypeOp : PDLConstr_Op<"get_value_type", [Pure]> {
+def Match_GetValueTypeOp : Match_Op<"get_value_type", [Pure]> {
   let summary = "Get the type of a value or value range (non-nullable)";
   let description = [{
     Gets the type of a value (or the types of a value range). Always succeeds
@@ -289,7 +289,7 @@ def PDLConstr_GetValueTypeOp : PDLConstr_Op<"get_value_type", [Pure]> {
   let hasVerifier = 1;
 }
 
-def PDLConstr_GetAttributeTypeOp : PDLConstr_Op<"get_attribute_type", [Pure]> {
+def Match_GetAttributeTypeOp : Match_Op<"get_attribute_type", [Pure]> {
   let summary = "Get the type of an attribute (non-nullable)";
   let description = [{
     Gets the type of an attribute. Always succeeds because the input attribute
@@ -300,7 +300,7 @@ def PDLConstr_GetAttributeTypeOp : PDLConstr_Op<"get_attribute_type", [Pure]> {
   let assemblyFormat = "`of` $attribute attr-dict `:` type($result)";
 }
 
-def PDLConstr_GetUsersOp : PDLConstr_Op<"get_users", [Pure]> {
+def Match_GetUsersOp : Match_Op<"get_users", [Pure]> {
   let summary = "Get all users of a value (non-nullable)";
   let description = [{
     Gets all operations that use a value. Always returns a range
@@ -312,17 +312,17 @@ def PDLConstr_GetUsersOp : PDLConstr_Op<"get_users", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::ExtractOp
+// match::ExtractOp
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_ExtractOp
-    : PDLConstr_Op<"extract", [Pure,
+def Match_ExtractOp
+    : Match_Op<"extract", [Pure,
      TypesMatchWith<
         "`range` is a PDL range whose element type matches type of `result`",
         "result", "range", "pdl::RangeType::get($_self)">]> {
   let summary = "Extract the item at the specified index in a range";
   let description = [{
-    `pdl_constr.extract` extracts an item from a range at the specified index,
+    `match.extract` extracts an item from a range at the specified index,
     mirroring `pdl_interp.extract`. If the index is out of range, the result is
     null. It lowers directly to `pdl_interp.extract`.
 
@@ -330,7 +330,7 @@ def PDLConstr_ExtractOp
 
     ```mlir
     // Extract the value at index 0 from a range of values.
-    %v = pdl_constr.extract 0 of %values : !pdl.value
+    %v = match.extract 0 of %values : !pdl.value
     ```
   }];
 
@@ -349,10 +349,10 @@ def PDLConstr_ExtractOp
 }
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::GetEachOp
+// match::GetEachOp
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_GetEachOp : PDLConstr_Op<"get_each", [Pure]> {
+def Match_GetEachOp : Match_Op<"get_each", [Pure]> {
   let summary = "Extract elements from a range for constraint purposes";
   let description = [{
     Extracts a single element from a range for constraint purposes. At this
@@ -377,7 +377,7 @@ def PDLConstr_GetEachOp : PDLConstr_Op<"get_each", [Pure]> {
 // even when they produce no SSA results.
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_IsNotNullOp : PDLConstr_Op<"is_not_null"> {
+def Match_IsNotNullOp : Match_Op<"is_not_null"> {
   let summary = "Unwrap an optional value, failing if it is null";
   let description = [{
     Checks that an optional value is non-null and produces the bare inner
@@ -388,7 +388,7 @@ def PDLConstr_IsNotNullOp : PDLConstr_Op<"is_not_null"> {
     By SSA dominance, the unwrapped result can only be used by ops below this
     one, which mirrors the control-flow guarantee in the lowered form.
   }];
-  let arguments = (ins PDLConstr_OptionalType:$optionalValue);
+  let arguments = (ins Match_OptionalType:$optionalValue);
   let results = (outs PDL_AnyType:$unwrapped);
   let assemblyFormat = [{
     $optionalValue `:` type($optionalValue) `->` type($unwrapped) attr-dict
@@ -396,7 +396,7 @@ def PDLConstr_IsNotNullOp : PDLConstr_Op<"is_not_null"> {
   let hasVerifier = 1;
 }
 
-def PDLConstr_HasNameOp : PDLConstr_Op<"has_name"> {
+def Match_HasNameOp : Match_Op<"has_name"> {
   let summary = "Test the operation name";
   let description = [{
     Tests that `op` has the given name. On failure transfers control to the
@@ -406,7 +406,7 @@ def PDLConstr_HasNameOp : PDLConstr_Op<"has_name"> {
   let assemblyFormat = "$op `,` $name attr-dict";
 }
 
-def PDLConstr_EqualOp : PDLConstr_Op<"equal", [SameTypeOperands]> {
+def Match_EqualOp : Match_Op<"equal", [SameTypeOperands]> {
   let summary = "Test equality of two values";
   let description = [{
     Tests that `lhs` and `rhs` are equal at runtime. On failure transfers
@@ -416,13 +416,13 @@ def PDLConstr_EqualOp : PDLConstr_Op<"equal", [SameTypeOperands]> {
   let assemblyFormat = "$lhs `,` $rhs `:` type($lhs) attr-dict";
 }
 
-def PDLConstr_HasTypeOp : PDLConstr_Op<"has_type"> {
+def Match_HasTypeOp : Match_Op<"has_type"> {
   let summary = "Test that a type matches a constant type";
   let arguments = (ins PDL_Type:$typeValue, TypeAttr:$constantType);
   let assemblyFormat = "$typeValue `,` $constantType attr-dict";
 }
 
-def PDLConstr_HasTypesOp : PDLConstr_Op<"has_types"> {
+def Match_HasTypesOp : Match_Op<"has_types"> {
   let summary = "Test that a range of types matches a constant array of types";
   let description = [{
     Tests that a `!pdl.range<type>` matches a statically known array of types.
@@ -432,13 +432,13 @@ def PDLConstr_HasTypesOp : PDLConstr_Op<"has_types"> {
   let assemblyFormat = "$types `,` $constantTypes attr-dict";
 }
 
-def PDLConstr_HasAttrValueOp : PDLConstr_Op<"has_attr_value"> {
+def Match_HasAttrValueOp : Match_Op<"has_attr_value"> {
   let summary = "Test that an attribute matches a constant value";
   let arguments = (ins PDL_Attribute:$attribute, AnyAttr:$value);
   let assemblyFormat = "$attribute `is` $value attr-dict";
 }
 
-def PDLConstr_CheckOperandCountOp : PDLConstr_Op<"check_operand_count"> {
+def Match_CheckOperandCountOp : Match_Op<"check_operand_count"> {
   let summary = "Test the operand count of an operation";
   let arguments = (ins PDL_Operation:$op,
                        ConfinedAttr<I32Attr, [IntNonNegative]>:$count,
@@ -448,7 +448,7 @@ def PDLConstr_CheckOperandCountOp : PDLConstr_Op<"check_operand_count"> {
   }];
 }
 
-def PDLConstr_CheckResultCountOp : PDLConstr_Op<"check_result_count"> {
+def Match_CheckResultCountOp : Match_Op<"check_result_count"> {
   let summary = "Test the result count of an operation";
   let arguments = (ins PDL_Operation:$op,
                        ConfinedAttr<I32Attr, [IntNonNegative]>:$count,
@@ -458,7 +458,7 @@ def PDLConstr_CheckResultCountOp : PDLConstr_Op<"check_result_count"> {
   }];
 }
 
-def PDLConstr_ApplyNativeConstraintOp : PDLConstr_Op<"apply_native_constraint"> {
+def Match_ApplyNativeConstraintOp : Match_Op<"apply_native_constraint"> {
   let summary = "Apply a native constraint";
   let description = [{
     Applies an externally registered native constraint. On failure transfers
@@ -475,14 +475,14 @@ def PDLConstr_ApplyNativeConstraintOp : PDLConstr_Op<"apply_native_constraint"> 
 }
 
 //===----------------------------------------------------------------------===//
-// pdl_constr::SuccessOp
+// match::SuccessOp
 //===----------------------------------------------------------------------===//
 
-def PDLConstr_SuccessOp : PDLConstr_Op<"success", [
+def Match_SuccessOp : Match_Op<"success", [
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "Marks a successful pattern match";
   let description = [{
-    `pdl_constr.success` marks a successful pattern match. Its precondition
+    `match.success` marks a successful pattern match. Its precondition
     is implicit: every test op above it in the same region, plus every test
     op in enclosing regions on the path from the matcher root to this op,
     must have succeeded.
@@ -491,13 +491,13 @@ def PDLConstr_SuccessOp : PDLConstr_Op<"success", [
     benefits), a symbol reference to the rewriter, and the list of match
     values to forward. The signature mirrors `pdl_interp.record_match` so
     that the rewriter metadata passes through unchanged to the
-    `pdl_constr → pdl_interp` lowering, which emits the matching
+    `match → pdl_interp` lowering, which emits the matching
     `pdl_interp.record_match`.
 
     Example:
 
     ```mlir
-    pdl_constr.success @rewriters::@rewriter
+    match.success @rewriters::@rewriter
         benefit(1) (%root, %lhs : !pdl.operation, !pdl.value)
     ```
   }];
@@ -512,4 +512,4 @@ def PDLConstr_SuccessOp : PDLConstr_Op<"success", [
   let hasVerifier = 1;
 }
 
-#endif // MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTROPS
+#endif // MLIR_DIALECT_MATCH_IR_MATCHOPS

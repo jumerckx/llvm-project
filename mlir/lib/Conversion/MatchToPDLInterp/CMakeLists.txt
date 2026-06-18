@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRPDLConstrToPDLInterp
-  PDLConstrToPDLInterp.cpp
+add_mlir_conversion_library(MLIRMatchToPDLInterp
+  MatchToPDLInterp.cpp
 
   ADDITIONAL_HEADER_DIRS
-  ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/PDLConstrToPDLInterp
+  ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/MatchToPDLInterp
 
   DEPENDS
   MLIRConversionPassIncGen
@@ -10,7 +10,7 @@ add_mlir_conversion_library(MLIRPDLConstrToPDLInterp
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPDLDialect
-  MLIRPDLConstrDialect
+  MLIRMatchDialect
   MLIRPDLInterpDialect
   MLIRPDLToPDLInterp
   MLIRPass

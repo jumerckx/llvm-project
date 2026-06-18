@@ -1,4 +1,4 @@
-//===- PDLToPDLConstr.cpp - Lower PDL to PDL Constraint dialect ------------===//
+//===- PDLToMatch.cpp - Lower PDL to PDL Constraint dialect ------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This file lowers each `pdl.pattern` in a module into its own
-// `pdl_constr.matcher`. The lowering performs root selection / multi-root
+// `match.matcher`. The lowering performs root selection / multi-root
 // ordering using the shared helpers from the `PDLToPDLInterp` library and
 // emits an ordered linear sequence of navigation and constraint ops inside
 // the matcher body. Implicit failure semantics of the constraint ops
@@ -16,22 +16,22 @@
 // values of the old design.
 //
 // A subsequent pass is expected to combine multiple matchers into a single
-// shared matcher tree (using `pdl_constr.try` / `pdl_constr.switch_*`); this
+// shared matcher tree (using `match.try` / `match.switch_*`); this
 // pass deliberately emits one matcher per pattern with no `try` / `switch`
 // nesting beyond what is necessary to express the pattern itself.
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Conversion/PDLToPDLConstr/PDLToPDLConstr.h"
+#include "mlir/Conversion/PDLToMatch/PDLToMatch.h"
 
 #include "mlir/Conversion/PDLToPDLInterp/RewriterGen.h"
 #include "mlir/Conversion/PDLToPDLInterp/RootOrdering.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDL/IR/PDLOps.h"
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstr.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrTypes.h"
+#include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/Match/IR/MatchOps.h"
+#include "mlir/Dialect/Match/IR/MatchTypes.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
@@ -41,13 +41,13 @@
 #include "llvm/Support/Debug.h"
 
 namespace mlir {
-#define GEN_PASS_DEF_CONVERTPDLTOPDLCONSTRPASS
+#define GEN_PASS_DEF_CONVERTPDLTOMATCHPASS
 #include "mlir/Conversion/Passes.h.inc"
 } // namespace mlir
 
 using namespace mlir;
 
-#define DEBUG_TYPE "convert-pdl-to-pdl-constr"
+#define DEBUG_TYPE "convert-pdl-to-match"
 
 //===----------------------------------------------------------------------===//
 // Shared helpers
@@ -68,24 +68,24 @@ using pdl_to_pdl_interp::RootOrderingGraph;
 using pdl_to_pdl_interp::useOperandGroup;
 
 //===----------------------------------------------------------------------===//
-// PDL → pdl_constr Emitter
+// PDL → match Emitter
 //===----------------------------------------------------------------------===//
 
 namespace {
 
-/// Emits an ordered linear sequence of `pdl_constr` ops for a single
+/// Emits an ordered linear sequence of `match` ops for a single
 /// `pdl::PatternOp`.
-class PDLConstrEmitter {
+class MatchEmitter {
 public:
-  PDLConstrEmitter(OpBuilder &builder, pdl::PatternOp pattern,
+  MatchEmitter(OpBuilder &builder, pdl::PatternOp pattern,
                    ModuleOp rewriterModule,
                    SymbolTable &rewriterSymbolTable)
       : builder(builder), pattern(pattern), ctx(pattern.getContext()),
         loc(pattern.getLoc()), rewriterModule(rewriterModule),
         rewriterSymbolTable(rewriterSymbolTable) {}
 
-  /// Emit a `pdl_constr.matcher` for the wrapped `pdl.pattern`.
-  pdl_constr::MatcherOp emit();
+  /// Emit a `match.matcher` for the wrapped `pdl.pattern`.
+  match::MatcherOp emit();
 
 private:
   /// Emit a nullable navigation op and an `is_not_null` unwrap, returning the
@@ -93,7 +93,7 @@ private:
   Value emitNavAndUnwrap(Value navResult, Type innerType);
 
   /// Emit navigation + constraints for a single `pdl::OperationOp` (downward
-  /// tree walk). `opVal` is the `pdl_constr` SSA value representing the op.
+  /// tree walk). `opVal` is the `match` SSA value representing the op.
   /// If `ignoreOperand` is set, skip that operand (used during upward
   /// traversals).
   void emitOperationConstraints(pdl::OperationOp op, Value opVal,
@@ -115,7 +115,7 @@ private:
   /// Emit non-tree predicates (standalone results, native constraints).
   void emitNonTreePredicates();
 
-  /// Get or create the pdl_constr value corresponding to a pdl value. If the
+  /// Get or create the match value corresponding to a pdl value. If the
   /// value has already been visited, returns the existing value and emits an
   /// equality constraint. Returns nullptr if the value is new (and registers
   /// it).
@@ -131,13 +131,13 @@ private:
   ModuleOp rewriterModule;
   SymbolTable &rewriterSymbolTable;
 
-  /// Mapping from `pdl` SSA values to their `pdl_constr` SSA values.
+  /// Mapping from `pdl` SSA values to their `match` SSA values.
   DenseMap<Value, Value> valueMap;
 };
 
 } // namespace
 
-Value PDLConstrEmitter::getOrRegister(Value pdlVal, Value constrVal) {
+Value MatchEmitter::getOrRegister(Value pdlVal, Value constrVal) {
   auto it = valueMap.try_emplace(pdlVal, constrVal);
   if (!it.second) {
     // Already visited — emit equality constraint.
@@ -145,46 +145,46 @@ Value PDLConstrEmitter::getOrRegister(Value pdlVal, Value constrVal) {
     if (isa_and_nonnull<pdl::AttributeOp, pdl::OperandOp, pdl::OperandsOp,
                         pdl::OperationOp, pdl::TypeOp, pdl::TypesOp>(
             pdlVal.getDefiningOp())) {
-      pdl_constr::EqualOp::create(builder, loc, constrVal, existing);
+      match::EqualOp::create(builder, loc, constrVal, existing);
     }
     return existing;
   }
   return Value(); // new registration
 }
 
-Value PDLConstrEmitter::emitNavAndUnwrap(Value navResult, Type innerType) {
-  return pdl_constr::IsNotNullOp::create(builder, loc, innerType, navResult)
+Value MatchEmitter::emitNavAndUnwrap(Value navResult, Type innerType) {
+  return match::IsNotNullOp::create(builder, loc, innerType, navResult)
       .getUnwrapped();
 }
 
-void PDLConstrEmitter::emitTypeConstraints(Value pdlVal, Value constrVal) {
+void MatchEmitter::emitTypeConstraints(Value pdlVal, Value constrVal) {
   if (auto typeOp = pdlVal.getDefiningOp<pdl::TypeOp>()) {
     if (Attribute type = typeOp.getConstantTypeAttr())
-      pdl_constr::HasTypeOp::create(builder, loc, constrVal,
+      match::HasTypeOp::create(builder, loc, constrVal,
                                     cast<TypeAttr>(type));
   } else if (auto typesOp = pdlVal.getDefiningOp<pdl::TypesOp>()) {
     if (Attribute types = typesOp.getConstantTypesAttr())
-      pdl_constr::HasTypesOp::create(builder, loc, constrVal,
+      match::HasTypesOp::create(builder, loc, constrVal,
                                      cast<ArrayAttr>(types));
   }
 }
 
-void PDLConstrEmitter::emitAttributeConstraints(pdl::AttributeOp attrOp,
+void MatchEmitter::emitAttributeConstraints(pdl::AttributeOp attrOp,
                                                 Value constrVal) {
   // If the attribute has a type, constrain the type.
   if (Value type = attrOp.getValueType()) {
-    Value typeVal = pdl_constr::GetAttributeTypeOp::create(
+    Value typeVal = match::GetAttributeTypeOp::create(
         builder, loc, builder.getType<pdl::TypeType>(), constrVal);
     Value existing = getOrRegister(type, typeVal);
     if (!existing)
       emitTypeConstraints(type, typeVal);
   } else if (Attribute value = attrOp.getValueAttr()) {
     // If the attribute has a constant value, constrain it.
-    pdl_constr::HasAttrValueOp::create(builder, loc, constrVal, value);
+    match::HasAttrValueOp::create(builder, loc, constrVal, value);
   }
 }
 
-void PDLConstrEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
+void MatchEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
   TypeSwitch<Operation *>(pdlVal.getDefiningOp())
       .Case<pdl::OperandOp, pdl::OperandsOp>([&](auto op) {
         if (Value type = op.getValueType()) {
@@ -192,7 +192,7 @@ void PDLConstrEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
               isa<pdl::RangeType>(constrVal.getType())
                   ? (Type)pdl::RangeType::get(builder.getType<pdl::TypeType>())
                   : (Type)builder.getType<pdl::TypeType>();
-          Value typeVal = pdl_constr::GetValueTypeOp::create(
+          Value typeVal = match::GetValueTypeOp::create(
               builder, loc, typeResultType, constrVal);
           Value existing = getOrRegister(type, typeVal);
           if (!existing)
@@ -201,9 +201,9 @@ void PDLConstrEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
       })
       .Case<pdl::ResultOp, pdl::ResultsOp>([&](auto op) {
         // Navigate to the defining op of the operand.
-        Value defOpOpt = pdl_constr::GetDefiningOpOp::create(
+        Value defOpOpt = match::GetDefiningOpOp::create(
             builder, loc,
-            pdl_constr::OptionalType::get(
+            match::OptionalType::get(
                 builder.getType<pdl::OperationType>()),
             constrVal);
         Value defOp =
@@ -214,9 +214,9 @@ void PDLConstrEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
         bool isVariadic = isa<pdl::RangeType>(pdlVal.getType());
         Value resultVal;
         if (isa<pdl::ResultOp>(pdlVal.getDefiningOp())) {
-          Value resOpt = pdl_constr::GetResultOp::create(
+          Value resOpt = match::GetResultOp::create(
               builder, loc,
-              pdl_constr::OptionalType::get(builder.getType<pdl::ValueType>()),
+              match::OptionalType::get(builder.getType<pdl::ValueType>()),
               defOp, builder.getI32IntegerAttr(*index));
           resultVal =
               emitNavAndUnwrap(resOpt, builder.getType<pdl::ValueType>());
@@ -225,13 +225,13 @@ void PDLConstrEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
                                ? (Type)pdl::RangeType::get(
                                      builder.getType<pdl::ValueType>())
                                : (Type)builder.getType<pdl::ValueType>();
-          Value resOpt = pdl_constr::GetResultsOp::create(
-              builder, loc, pdl_constr::OptionalType::get(innerType), defOp,
+          Value resOpt = match::GetResultsOp::create(
+              builder, loc, match::OptionalType::get(innerType), defOp,
               index ? builder.getI32IntegerAttr(*index) : IntegerAttr());
           resultVal = emitNavAndUnwrap(resOpt, innerType);
         }
         // Equality constraint: result == operand.
-        pdl_constr::EqualOp::create(builder, loc, resultVal, constrVal);
+        match::EqualOp::create(builder, loc, resultVal, constrVal);
 
         // Recursively process the defining operation.
         Value parentPdlVal = op.getParent();
@@ -243,11 +243,11 @@ void PDLConstrEmitter::emitOperandConstraints(Value pdlVal, Value constrVal) {
       });
 }
 
-void PDLConstrEmitter::emitOperationConstraints(
+void MatchEmitter::emitOperationConstraints(
     pdl::OperationOp op, Value opVal, std::optional<unsigned> ignoreOperand) {
   // Operation name constraint.
   if (std::optional<StringRef> opName = op.getOpName())
-    pdl_constr::HasNameOp::create(builder, loc, opVal,
+    match::HasNameOp::create(builder, loc, opVal,
                                   builder.getStringAttr(*opName));
 
   // Operand count constraint.
@@ -255,11 +255,11 @@ void PDLConstrEmitter::emitOperationConstraints(
   unsigned minOperands = getNumNonRangeValues(operands);
   if (minOperands != operands.size()) {
     if (minOperands)
-      pdl_constr::CheckOperandCountOp::create(
+      match::CheckOperandCountOp::create(
           builder, loc, opVal, builder.getI32IntegerAttr(minOperands),
           /*atLeast=*/builder.getUnitAttr());
   } else {
-    pdl_constr::CheckOperandCountOp::create(
+    match::CheckOperandCountOp::create(
         builder, loc, opVal, builder.getI32IntegerAttr(minOperands),
         /*atLeast=*/UnitAttr());
   }
@@ -268,11 +268,11 @@ void PDLConstrEmitter::emitOperationConstraints(
   OperandRange types = op.getTypeValues();
   unsigned minResults = getNumNonRangeValues(types);
   if (minResults == types.size()) {
-    pdl_constr::CheckResultCountOp::create(
+    match::CheckResultCountOp::create(
         builder, loc, opVal, builder.getI32IntegerAttr(types.size()),
         /*atLeast=*/UnitAttr());
   } else if (minResults) {
-    pdl_constr::CheckResultCountOp::create(
+    match::CheckResultCountOp::create(
         builder, loc, opVal, builder.getI32IntegerAttr(minResults),
         /*atLeast=*/builder.getUnitAttr());
   }
@@ -281,9 +281,9 @@ void PDLConstrEmitter::emitOperationConstraints(
   for (auto [attrName, attr] :
        llvm::zip(op.getAttributeValueNames(), op.getAttributeValues())) {
     StringRef name = cast<StringAttr>(attrName).getValue();
-    Value attrOpt = pdl_constr::GetAttributeOp::create(
+    Value attrOpt = match::GetAttributeOp::create(
         builder, loc,
-        pdl_constr::OptionalType::get(builder.getType<pdl::AttributeType>()),
+        match::OptionalType::get(builder.getType<pdl::AttributeType>()),
         opVal, builder.getStringAttr(name));
     Value attrVal =
         emitNavAndUnwrap(attrOpt, builder.getType<pdl::AttributeType>());
@@ -299,8 +299,8 @@ void PDLConstrEmitter::emitOperationConstraints(
   if (operands.size() == 1 && isa<pdl::RangeType>(operands[0].getType())) {
     // Single variadic operand covering all operands.
     Type rangeValType = pdl::RangeType::get(builder.getType<pdl::ValueType>());
-    Value opsOpt = pdl_constr::GetOperandsOp::create(
-        builder, loc, pdl_constr::OptionalType::get(rangeValType), opVal,
+    Value opsOpt = match::GetOperandsOp::create(
+        builder, loc, match::OptionalType::get(rangeValType), opVal,
         /*index=*/IntegerAttr());
     // Unwrap to a `range<value>`. The all-operands group can never be null at
     // runtime, but downstream ops expect bare PDL types so we still unwrap
@@ -325,14 +325,14 @@ void PDLConstrEmitter::emitOperationConstraints(
                              ? (Type)pdl::RangeType::get(
                                    builder.getType<pdl::ValueType>())
                              : (Type)builder.getType<pdl::ValueType>();
-        Value opsOpt = pdl_constr::GetOperandsOp::create(
-            builder, loc, pdl_constr::OptionalType::get(innerType), opVal,
+        Value opsOpt = match::GetOperandsOp::create(
+            builder, loc, match::OptionalType::get(innerType), opVal,
             builder.getI32IntegerAttr(operandIt.index()));
         operandVal = emitNavAndUnwrap(opsOpt, innerType);
       } else {
-        Value opOpt = pdl_constr::GetOperandOp::create(
+        Value opOpt = match::GetOperandOp::create(
             builder, loc,
-            pdl_constr::OptionalType::get(builder.getType<pdl::ValueType>()),
+            match::OptionalType::get(builder.getType<pdl::ValueType>()),
             opVal, builder.getI32IntegerAttr(operandIt.index()));
         operandVal =
             emitNavAndUnwrap(opOpt, builder.getType<pdl::ValueType>());
@@ -348,13 +348,13 @@ void PDLConstrEmitter::emitOperationConstraints(
   if (types.size() == 1 && isa<pdl::RangeType>(types[0].getType())) {
     // Single variadic result covering all results.
     Type rangeValType = pdl::RangeType::get(builder.getType<pdl::ValueType>());
-    Value resOpt = pdl_constr::GetResultsOp::create(
-        builder, loc, pdl_constr::OptionalType::get(rangeValType), opVal,
+    Value resOpt = match::GetResultsOp::create(
+        builder, loc, match::OptionalType::get(rangeValType), opVal,
         /*index=*/IntegerAttr());
     Value resVal = emitNavAndUnwrap(resOpt, rangeValType);
 
     Type rangeTypeType = pdl::RangeType::get(builder.getType<pdl::TypeType>());
-    Value typeVal = pdl_constr::GetValueTypeOp::create(builder, loc,
+    Value typeVal = match::GetValueTypeOp::create(builder, loc,
                                                        rangeTypeType, resVal);
 
     Value existing = getOrRegister(types[0], typeVal);
@@ -374,14 +374,14 @@ void PDLConstrEmitter::emitOperationConstraints(
                            ? (Type)pdl::RangeType::get(
                                  builder.getType<pdl::ValueType>())
                            : (Type)builder.getType<pdl::ValueType>();
-      Value resOpt = pdl_constr::GetResultsOp::create(
-          builder, loc, pdl_constr::OptionalType::get(innerType), opVal,
+      Value resOpt = match::GetResultsOp::create(
+          builder, loc, match::OptionalType::get(innerType), opVal,
           builder.getI32IntegerAttr(idx));
       resultVal = emitNavAndUnwrap(resOpt, innerType);
     } else {
-      Value resOpt = pdl_constr::GetResultOp::create(
+      Value resOpt = match::GetResultOp::create(
           builder, loc,
-          pdl_constr::OptionalType::get(builder.getType<pdl::ValueType>()),
+          match::OptionalType::get(builder.getType<pdl::ValueType>()),
           opVal, builder.getI32IntegerAttr(idx));
       resultVal = emitNavAndUnwrap(resOpt, builder.getType<pdl::ValueType>());
     }
@@ -391,7 +391,7 @@ void PDLConstrEmitter::emitOperationConstraints(
         isa<pdl::RangeType>(resultVal.getType())
             ? (Type)pdl::RangeType::get(builder.getType<pdl::TypeType>())
             : (Type)builder.getType<pdl::TypeType>();
-    Value typeVal = pdl_constr::GetValueTypeOp::create(builder, loc,
+    Value typeVal = match::GetValueTypeOp::create(builder, loc,
                                                        typeResultType, resultVal);
 
     Value existing = getOrRegister(typeValue, typeVal);
@@ -400,25 +400,25 @@ void PDLConstrEmitter::emitOperationConstraints(
   }
 }
 
-void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
+void MatchEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
                                            unsigned rootID) {
   Value value = opIndex.parent;
   TypeSwitch<Operation *>(value.getDefiningOp())
       .Case([&](pdl::OperationOp operationOp) {
         // `get_users` requires a single `!pdl.value`. If `pos` is a range,
-        // extract a representative element first using `pdl_constr.extract`;
-        // the `pdl_constr -> pdl_interp` lowering emits the matching
+        // extract a representative element first using `match.extract`;
+        // the `match -> pdl_interp` lowering emits the matching
         // `pdl_interp.extract`.
         Value userPos = pos;
         if (isa<pdl::RangeType>(pos.getType()))
-          userPos = pdl_constr::ExtractOp::create(builder, loc, pos, 0);
+          userPos = match::ExtractOp::create(builder, loc, pos, 0);
 
         // Get users and iterate.
-        Value usersVal = pdl_constr::GetUsersOp::create(
+        Value usersVal = match::GetUsersOp::create(
             builder, loc,
             pdl::RangeType::get(builder.getType<pdl::OperationType>()),
             userPos);
-        Value opVal = pdl_constr::GetEachOp::create(
+        Value opVal = match::GetEachOp::create(
             builder, loc, builder.getType<pdl::OperationType>(), usersVal);
 
         // Compare the operand(s) of the user against the input value(s).
@@ -427,8 +427,8 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
           // All operands.
           Type rangeValType =
               pdl::RangeType::get(builder.getType<pdl::ValueType>());
-          Value opsOpt = pdl_constr::GetOperandsOp::create(
-              builder, loc, pdl_constr::OptionalType::get(rangeValType), opVal,
+          Value opsOpt = match::GetOperandsOp::create(
+              builder, loc, match::OptionalType::get(rangeValType), opVal,
               /*index=*/IntegerAttr());
           operandVal = emitNavAndUnwrap(opsOpt, rangeValType);
         } else if (useOperandGroup(operationOp, *opIndex.index)) {
@@ -438,21 +438,21 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
                                ? (Type)pdl::RangeType::get(
                                      builder.getType<pdl::ValueType>())
                                : (Type)builder.getType<pdl::ValueType>();
-          Value opsOpt = pdl_constr::GetOperandsOp::create(
-              builder, loc, pdl_constr::OptionalType::get(innerType), opVal,
+          Value opsOpt = match::GetOperandsOp::create(
+              builder, loc, match::OptionalType::get(innerType), opVal,
               builder.getI32IntegerAttr(*opIndex.index));
           operandVal = emitNavAndUnwrap(opsOpt, innerType);
         } else {
-          Value opOpt = pdl_constr::GetOperandOp::create(
+          Value opOpt = match::GetOperandOp::create(
               builder, loc,
-              pdl_constr::OptionalType::get(builder.getType<pdl::ValueType>()),
+              match::OptionalType::get(builder.getType<pdl::ValueType>()),
               opVal, builder.getI32IntegerAttr(*opIndex.index));
           operandVal =
               emitNavAndUnwrap(opOpt, builder.getType<pdl::ValueType>());
         }
         // Equality constraint: operand == pos (the value we're traversing
         // from).
-        pdl_constr::EqualOp::create(builder, loc, operandVal, pos);
+        match::EqualOp::create(builder, loc, operandVal, pos);
 
         // Register this operation.
         bool inserted = valueMap.try_emplace(value, opVal).second;
@@ -466,9 +466,9 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
       })
       .Case([&](pdl::ResultOp resultOp) {
         // Individual result.
-        Value resOpt = pdl_constr::GetResultOp::create(
+        Value resOpt = match::GetResultOp::create(
             builder, loc,
-            pdl_constr::OptionalType::get(builder.getType<pdl::ValueType>()),
+            match::OptionalType::get(builder.getType<pdl::ValueType>()),
             pos, builder.getI32IntegerAttr(*opIndex.index));
         pos = emitNavAndUnwrap(resOpt, builder.getType<pdl::ValueType>());
         valueMap.try_emplace(value, pos);
@@ -481,13 +481,13 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
                                    builder.getType<pdl::ValueType>())
                              : (Type)builder.getType<pdl::ValueType>();
         if (opIndex.index) {
-          Value resOpt = pdl_constr::GetResultsOp::create(
-              builder, loc, pdl_constr::OptionalType::get(innerType), pos,
+          Value resOpt = match::GetResultsOp::create(
+              builder, loc, match::OptionalType::get(innerType), pos,
               builder.getI32IntegerAttr(*opIndex.index));
           pos = emitNavAndUnwrap(resOpt, innerType);
         } else {
-          Value resOpt = pdl_constr::GetResultsOp::create(
-              builder, loc, pdl_constr::OptionalType::get(innerType), pos,
+          Value resOpt = match::GetResultsOp::create(
+              builder, loc, match::OptionalType::get(innerType), pos,
               /*index=*/IntegerAttr());
           pos = emitNavAndUnwrap(resOpt, innerType);
         }
@@ -495,7 +495,7 @@ void PDLConstrEmitter::emitUpwardTraversal(OpIndex opIndex, Value &pos,
       });
 }
 
-void PDLConstrEmitter::emitNonTreePredicates() {
+void MatchEmitter::emitNonTreePredicates() {
   for (Operation &op : pattern.getBodyRegion().getOps()) {
     TypeSwitch<Operation *>(&op)
         .Case([&](pdl::ApplyNativeConstraintOp constraintOp) {
@@ -514,7 +514,7 @@ void PDLConstrEmitter::emitNonTreePredicates() {
           SmallVector<Type> resultTypes(constraintOp.getResultTypes().begin(),
                                         constraintOp.getResultTypes().end());
 
-          auto nativeConstr = pdl_constr::ApplyNativeConstraintOp::create(
+          auto nativeConstr = match::ApplyNativeConstraintOp::create(
               builder, loc, resultTypes, constraintOp.getNameAttr(), args,
               constraintOp.getIsNegatedAttr());
 
@@ -530,9 +530,9 @@ void PDLConstrEmitter::emitNonTreePredicates() {
           Value parentVal = valueMap.lookup(resultOp.getParent());
           if (!parentVal)
             return;
-          Value resOpt = pdl_constr::GetResultOp::create(
+          Value resOpt = match::GetResultOp::create(
               builder, loc,
-              pdl_constr::OptionalType::get(builder.getType<pdl::ValueType>()),
+              match::OptionalType::get(builder.getType<pdl::ValueType>()),
               parentVal, builder.getI32IntegerAttr(resultOp.getIndex()));
           Value resultVal =
               emitNavAndUnwrap(resOpt, builder.getType<pdl::ValueType>());
@@ -550,8 +550,8 @@ void PDLConstrEmitter::emitNonTreePredicates() {
                                ? (Type)pdl::RangeType::get(
                                      builder.getType<pdl::ValueType>())
                                : (Type)builder.getType<pdl::ValueType>();
-          Value resOpt = pdl_constr::GetResultsOp::create(
-              builder, loc, pdl_constr::OptionalType::get(innerType), parentVal,
+          Value resOpt = match::GetResultsOp::create(
+              builder, loc, match::OptionalType::get(innerType), parentVal,
               index ? builder.getI32IntegerAttr(*index) : IntegerAttr());
           Value resultVal = emitNavAndUnwrap(resOpt, innerType);
           valueMap[resultOp] = resultVal;
@@ -559,7 +559,7 @@ void PDLConstrEmitter::emitNonTreePredicates() {
   }
 }
 
-pdl_constr::MatcherOp PDLConstrEmitter::emit() {
+match::MatcherOp MatchEmitter::emit() {
   SmallVector<Value> roots = detectRoots(pattern);
 
   // Build root ordering for multi-root patterns.
@@ -587,9 +587,9 @@ pdl_constr::MatcherOp PDLConstrEmitter::emit() {
     bestEdges = solver.preOrderTraversal(roots);
   }
 
-  // Create the `pdl_constr.matcher` op with the pattern's symbol name.
+  // Create the `match.matcher` op with the pattern's symbol name.
   auto matcher =
-      pdl_constr::MatcherOp::create(builder, loc, pattern.getSymNameAttr());
+      match::MatcherOp::create(builder, loc, pattern.getSymNameAttr());
 
   // Create the body block with a single `!pdl.operation` argument (the root).
   Block *body = &matcher.getBodyRegion().emplaceBlock();
@@ -640,7 +640,7 @@ pdl_constr::MatcherOp PDLConstrEmitter::emit() {
       pattern, rewriterModule, rewriterSymbolTable, builder, usedMatchValues);
 
   // Translate the pdl values used by the rewriter (from the match region)
-  // into the corresponding pdl_constr SSA values.
+  // into the corresponding match SSA values.
   SmallVector<Value, 8> mappedInputs;
   mappedInputs.reserve(usedMatchValues.size());
   for (Value matchValue : usedMatchValues) {
@@ -652,7 +652,7 @@ pdl_constr::MatcherOp PDLConstrEmitter::emit() {
   // Emit the success terminator. The benefit comes from the original pattern.
   IntegerAttr benefitAttr =
       builder.getIntegerAttr(builder.getIntegerType(16), pattern.getBenefit());
-  pdl_constr::SuccessOp::create(builder, loc, rewriterRef, benefitAttr,
+  match::SuccessOp::create(builder, loc, rewriterRef, benefitAttr,
                                 mappedInputs);
 
   return matcher;
@@ -663,19 +663,19 @@ pdl_constr::MatcherOp PDLConstrEmitter::emit() {
 //===----------------------------------------------------------------------===//
 
 namespace {
-struct PDLToPDLConstrPass
-    : public impl::ConvertPDLToPDLConstrPassBase<PDLToPDLConstrPass> {
+struct PDLToMatchPass
+    : public impl::ConvertPDLToMatchPassBase<PDLToMatchPass> {
   void runOnOperation() final;
 };
 } // namespace
 
-void PDLToPDLConstrPass::runOnOperation() {
+void PDLToMatchPass::runOnOperation() {
   ModuleOp module = getOperation();
   OpBuilder builder(module.getContext());
 
   // Create a nested module to hold the rewriter functions invoked after a
   // successful match. The same naming convention as the pdl_interp pipeline
-  // is used so that downstream consumers (and the eventual `pdl_constr ->
+  // is used so that downstream consumers (and the eventual `match ->
   // pdl_interp` lowering) can find them under `@rewriters::@<pattern>`.
   builder.setInsertionPointToStart(module.getBody());
   ModuleOp rewriterModule =
@@ -686,7 +686,7 @@ void PDLToPDLConstrPass::runOnOperation() {
   for (pdl::PatternOp pattern :
        llvm::make_early_inc_range(module.getOps<pdl::PatternOp>())) {
     builder.setInsertionPoint(pattern);
-    PDLConstrEmitter emitter(builder, pattern, rewriterModule,
+    MatchEmitter emitter(builder, pattern, rewriterModule,
                              rewriterSymbolTable);
     emitter.emit();
     pattern.erase();
