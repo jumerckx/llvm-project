@@ -1,4 +1,4 @@
-// RUN: mlir-translate --pdl-constr-to-cpp %s | FileCheck %s
+// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
 
 // Two sibling `try` alternatives -> first-success-wins lambdas. The pattern's
 // static benefit is the max over the success ops (2).
@@ -9,14 +9,14 @@ module {
     module @b {}
   }
 
-  pdl_constr.matcher @m root(%root : !pdl.operation) {
-    pdl_constr.has_name %root, "test.foo"
-    pdl_constr.try {
-      pdl_constr.check_operand_count %root is 2
-      pdl_constr.success @rewriters::@a benefit(2) (%root : !pdl.operation)
+  match.matcher @m root(%root : !pdl.operation) {
+    match.has_name %root, "test.foo"
+    match.try {
+      match.check_operand_count %root is 2
+      match.success @rewriters::@a benefit(2) (%root : !pdl.operation)
     }
-    pdl_constr.try {
-      pdl_constr.success @rewriters::@b benefit(1) (%root : !pdl.operation)
+    match.try {
+      match.success @rewriters::@b benefit(1) (%root : !pdl.operation)
     }
   }
 }

@@ -1,4 +1,4 @@
-// RUN: mlir-translate --pdl-constr-to-cpp %s | FileCheck %s
+// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
 
 // Upward traversal: get_users + get_each -> an existential for-loop whose body
 // fails with `continue` and whose first matching element rewrites & returns.
@@ -8,13 +8,13 @@ module {
     module @r {}
   }
 
-  pdl_constr.matcher @m root(%root : !pdl.operation) {
-    %res = pdl_constr.get_result 0 of %root : !pdl_constr.optional<!pdl.value>
-    %v = pdl_constr.is_not_null %res : !pdl_constr.optional<!pdl.value> -> !pdl.value
-    %users = pdl_constr.get_users of %v : !pdl.range<operation>
-    %u = pdl_constr.get_each %users : !pdl.range<operation> -> !pdl.operation
-    pdl_constr.has_name %u, "test.use"
-    pdl_constr.success @rewriters::@r benefit(1) (%root, %u : !pdl.operation, !pdl.operation)
+  match.matcher @m root(%root : !pdl.operation) {
+    %res = match.get_result 0 of %root : !match.optional<!pdl.value>
+    %v = match.is_not_null %res : !match.optional<!pdl.value> -> !pdl.value
+    %users = match.get_users of %v : !pdl.range<operation>
+    %u = match.get_each %users : !pdl.range<operation> -> !pdl.operation
+    match.has_name %u, "test.use"
+    match.success @rewriters::@r benefit(1) (%root, %u : !pdl.operation, !pdl.operation)
   }
 }
 

@@ -1,4 +1,4 @@
-// RUN: mlir-translate --pdl-constr-to-cpp %s | FileCheck %s
+// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
 
 // `switch_op_name` -> an if/else-if chain on the runtime op name.
 
@@ -8,11 +8,11 @@ module {
     module @subi {}
   }
 
-  pdl_constr.matcher @m root(%root : !pdl.operation) {
-    pdl_constr.switch_op_name %root case "arith.addi" {
-      pdl_constr.success @rewriters::@addi benefit(1) (%root : !pdl.operation)
+  match.matcher @m root(%root : !pdl.operation) {
+    match.switch_op_name %root case "arith.addi" {
+      match.success @rewriters::@addi benefit(1) (%root : !pdl.operation)
     } case "arith.subi" {
-      pdl_constr.success @rewriters::@subi benefit(1) (%root : !pdl.operation)
+      match.success @rewriters::@subi benefit(1) (%root : !pdl.operation)
     }
   }
 }
