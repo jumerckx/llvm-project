@@ -116,6 +116,9 @@ private:
   DenseMap<Value, std::string> names;
   unsigned counter = 0;
   unsigned indentLevel = 0;
+  /// Set when an indexed operand/result group is emitted, so the supporting
+  /// `__pdl_get_group` helper is emitted into the file.
+  bool needsGroupHelper = false;
   /// Forward declarations for the extern rewrite hooks, keyed by function name
   /// so repeated references collapse to one declaration. `std::map` gives a
   /// deterministic (alphabetical) emission order.
@@ -293,24 +296,38 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
                  << "->getResult(" << o.getIndex() << ") : ::mlir::Value();\n";
         return success();
       })
-      .Case<GetOperandsOp>([&](GetOperandsOp o) -> LogicalResult {
-        if (o.getIndex()) {
-          return o.emitError("indexed operand groups are not yet supported by "
-                             "the C++ matcher emitter");
-        }
+      .Case<GetOperandsOp>([&](GetOperandsOp o) {
+        std::string opn = getName(o.getOp());
         std::string v = declareName(o.getResult());
-        indent() << "::mlir::ValueRange " << v << " = " << getName(o.getOp())
-                 << "->getOperands();\n";
+        if (o.getIndex()) {
+          needsGroupHelper = true;
+          indent() << "::std::optional<::mlir::ValueRange> " << v
+                   << " = __pdl_get_group(" << opn << ", " << *o.getIndex()
+                   << ", ::mlir::ValueRange(" << opn
+                   << "->getOperands()), \"operandSegmentSizes\", " << opn
+                   << "->hasTrait<::mlir::OpTrait::AttrSizedOperandSegments>()"
+                      ");\n";
+        } else {
+          indent() << "::std::optional<::mlir::ValueRange> " << v
+                   << " = ::mlir::ValueRange(" << opn << "->getOperands());\n";
+        }
         return success();
       })
-      .Case<GetResultsOp>([&](GetResultsOp o) -> LogicalResult {
-        if (o.getIndex()) {
-          return o.emitError("indexed result groups are not yet supported by "
-                             "the C++ matcher emitter");
-        }
+      .Case<GetResultsOp>([&](GetResultsOp o) {
+        std::string opn = getName(o.getOp());
         std::string v = declareName(o.getResult());
-        indent() << "::mlir::ResultRange " << v << " = " << getName(o.getOp())
-                 << "->getResults();\n";
+        if (o.getIndex()) {
+          needsGroupHelper = true;
+          indent() << "::std::optional<::mlir::ValueRange> " << v
+                   << " = __pdl_get_group(" << opn << ", " << *o.getIndex()
+                   << ", ::mlir::ValueRange(" << opn
+                   << "->getResults()), \"resultSegmentSizes\", " << opn
+                   << "->hasTrait<::mlir::OpTrait::AttrSizedResultSegments>()"
+                      ");\n";
+        } else {
+          indent() << "::std::optional<::mlir::ValueRange> " << v
+                   << " = ::mlir::ValueRange(" << opn << "->getResults());\n";
+        }
         return success();
       })
       .Case<GetAttributeOp>([&](GetAttributeOp o) {
@@ -375,10 +392,21 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
       })
       //===-- Tests ---------------------------------------------------------===//
       .Case<IsNotNullOp>([&](IsNotNullOp o) {
-        // The unwrapped value reuses the optional's storage / name.
         std::string name = getName(o.getOptionalValue());
-        mapName(o.getUnwrapped(), name);
-        fail("!" + name);
+        Type inner =
+            cast<OptionalType>(o.getOptionalValue().getType()).getInnerType();
+        if (isa<pdl::RangeType>(inner)) {
+          // Nullable ranges are stored as `std::optional<ValueRange>`; unwrap
+          // into a fresh bare-range variable.
+          fail("!" + name);
+          std::string u = declareName(o.getUnwrapped());
+          indent() << cppType(inner) << " " << u << " = *" << name << ";\n";
+        } else {
+          // Scalar optionals (Value/Operation*/Attribute/Type) carry their own
+          // null state, so the unwrapped value reuses the same variable.
+          mapName(o.getUnwrapped(), name);
+          fail("!" + name);
+        }
         return success();
       })
       .Case<HasNameOp>([&](HasNameOp o) {
@@ -539,10 +567,13 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
   os << "// The user must provide the `rewrite_*` hooks declared below.\n";
   os << "//===--------------------------------------------------------------"
         "------===//\n\n";
+  os << "#include \"mlir/IR/BuiltinAttributes.h\"\n";
+  os << "#include \"mlir/IR/OpDefinition.h\"\n";
   os << "#include \"mlir/IR/Operation.h\"\n";
   os << "#include \"mlir/IR/PatternMatch.h\"\n";
   os << "#include \"mlir/Parser/Parser.h\"\n";
-  os << "#include \"llvm/ADT/STLExtras.h\"\n\n";
+  os << "#include \"llvm/ADT/STLExtras.h\"\n";
+  os << "#include <optional>\n\n";
 
   // Gather matchers.
   SmallVector<MatcherOp> matchers;
@@ -559,6 +590,32 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
     // Pull collected info out of the sub-emitter.
     rewriterDecls = std::move(sub.rewriterDecls);
     structNames = std::move(sub.structNames);
+    needsGroupHelper = sub.needsGroupHelper;
+  }
+
+  // Supporting helper for indexed operand/result groups, mirroring the PDL
+  // bytecode interpreter's `executeGetOperandsResults`.
+  if (needsGroupHelper) {
+    os << "static ::std::optional<::mlir::ValueRange>\n"
+          "__pdl_get_group(::mlir::Operation *op, unsigned index,\n"
+          "                ::mlir::ValueRange values, ::llvm::StringRef "
+          "segmentAttr,\n"
+          "                bool hasSegments) {\n"
+          "  if (hasSegments) {\n"
+          "    auto seg = "
+          "op->getAttrOfType<::mlir::DenseI32ArrayAttr>(segmentAttr);\n"
+          "    if (!seg || (unsigned)seg.asArrayRef().size() <= index)\n"
+          "      return ::std::nullopt;\n"
+          "    ::llvm::ArrayRef<int32_t> segs = seg.asArrayRef();\n"
+          "    unsigned start = 0;\n"
+          "    for (unsigned i = 0; i < index; ++i)\n"
+          "      start += segs[i];\n"
+          "    return values.slice(start, segs[index]);\n"
+          "  }\n"
+          "  if (values.size() >= index)\n"
+          "    return values.drop_front(index);\n"
+          "  return ::std::nullopt;\n"
+          "}\n\n";
   }
 
   // Forward declarations for user-provided hooks.
