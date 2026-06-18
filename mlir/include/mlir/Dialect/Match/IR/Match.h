@@ -1,4 +1,4 @@
-//===- PDLConstr.h - PDL Constraint Dialect --------------------*- C++ -*-===//
+//===- Match.h - PDL Constraint Dialect --------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,16 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTR_H_
-#define MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTR_H_
+#ifndef MLIR_DIALECT_MATCH_IR_MATCH_H_
+#define MLIR_DIALECT_MATCH_IR_MATCH_H_
 
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/IR/Dialect.h"
 
 //===----------------------------------------------------------------------===//
-// PDLConstr Dialect
+// Match Dialect
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOpsDialect.h.inc"
+#include "mlir/Dialect/Match/IR/MatchOpsDialect.h.inc"
 
-#endif // MLIR_DIALECT_PDLCONSTR_IR_PDLCONSTR_H_
+#endif // MLIR_DIALECT_MATCH_IR_MATCH_H_

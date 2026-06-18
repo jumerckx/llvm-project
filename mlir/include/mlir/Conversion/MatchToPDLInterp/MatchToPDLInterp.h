@@ -1,4 +1,4 @@
-//===- PDLConstrToPDLInterp.h - pdl_constr to pdl_interp lowering *- C++ -*-==//
+//===- MatchToPDLInterp.h - match to pdl_interp lowering *- C++ -*-==//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,16 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file provides a pass that combines multiple `pdl_constr.pattern` ops
+// This file provides a pass that combines multiple `match.pattern` ops
 // into a single `pdl_interp` matcher function. The combination logic mirrors
 // the predicate-tree merging performed by `convert-pdl-to-pdl-interp`, but
-// the predicate set is reconstructed from `pdl_constr` IR instead of being
+// the predicate set is reconstructed from `match` IR instead of being
 // derived from a `pdl.pattern` op directly.
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_CONVERSION_PDLCONSTRTOPDLINTERP_PDLCONSTRTOPDLINTERP_H
-#define MLIR_CONVERSION_PDLCONSTRTOPDLINTERP_PDLCONSTRTOPDLINTERP_H
+#ifndef MLIR_CONVERSION_MATCHTOPDLINTERP_MATCHTOPDLINTERP_H
+#define MLIR_CONVERSION_MATCHTOPDLINTERP_MATCHTOPDLINTERP_H
 
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
@@ -25,9 +25,9 @@ class ModuleOp;
 template <typename OpT>
 class OperationPass;
 
-#define GEN_PASS_DECL_CONVERTPDLCONSTRTOPDLINTERPPASS
+#define GEN_PASS_DECL_CONVERTMATCHTOPDLINTERPPASS
 #include "mlir/Conversion/Passes.h.inc"
 
 } // namespace mlir
 
-#endif // MLIR_CONVERSION_PDLCONSTRTOPDLINTERP_PDLCONSTRTOPDLINTERP_H
+#endif // MLIR_CONVERSION_MATCHTOPDLINTERP_MATCHTOPDLINTERP_H

@@ -24,12 +24,12 @@ add_mlir_dialect_library(MLIRPDLDialect
 
   DEPENDS
   MLIRPDLOpsIncGen
-  MLIRPDLConstrOpsIncGen
+  MLIRMatchOpsIncGen
 
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRInferTypeOpInterface
-  MLIRPDLConstrDialect
+  MLIRMatchDialect
   MLIRPDLTypes
   MLIRSideEffectInterfaces
   )

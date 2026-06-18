@@ -144,7 +144,7 @@ private:
 //
 // Infrastructure for detecting the candidate roots of a `pdl.pattern` and
 // building the root-ordering cost graph from them. This is shared by the
-// PDL -> PDLInterp and PDL -> PDLConstr lowerings, which differ only in the
+// PDL -> PDLInterp and PDL -> Match lowerings, which differ only in the
 // emission backend driven by the resulting ordering.
 //===----------------------------------------------------------------------===//
 

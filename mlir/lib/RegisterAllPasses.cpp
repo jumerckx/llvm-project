@@ -34,7 +34,7 @@
 #include "mlir/Dialect/NVGPU/Transforms/Passes.h"
 #include "mlir/Dialect/OpenACC/Transforms/Passes.h"
 #include "mlir/Dialect/OpenMP/Transforms/Passes.h"
-#include "mlir/Dialect/PDLConstr/Transforms/Passes.h"
+#include "mlir/Dialect/Match/Transforms/Passes.h"
 #include "mlir/Dialect/Quant/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/SPIRV/Transforms/Passes.h"
@@ -83,7 +83,7 @@ void mlir::registerAllPasses() {
   shard::registerShardPasses();
   ml_program::registerMLProgramPasses();
   omp::registerOpenMPPasses();
-  pdl_constr::registerPDLConstrPasses();
+  match::registerMatchPasses();
   quant::registerQuantPasses();
   registerSCFPasses();
   registerShapePasses();

@@ -1,4 +1,4 @@
-//===- CombineMatchers.cpp - Combine pdl_constr.matcher ops ---------------===//
+//===- CombineMatchers.cpp - Combine match.matcher ops ---------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,16 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Combines every `pdl_constr.matcher` in a module into one combined matcher
-// that materializes the matcher tree directly in IR (`pdl_constr.try`,
-// `pdl_constr.switch_op_name`, `pdl_constr.switch_type`). The combining
+// Combines every `match.matcher` in a module into one combined matcher
+// that materializes the matcher tree directly in IR (`match.try`,
+// `match.switch_op_name`, `match.switch_type`). The combining
 // algorithm mirrors `MatcherNode::generateMatcherTree` in
 // `PDLToPDLInterp/PredicateTree.cpp`.
 //
-// Canonical predicates are represented as actual `pdl_constr` ops in a
+// Canonical predicates are represented as actual `match` ops in a
 // standalone "pool" block: exactly one pool op per equivalence class of
 // `(op name, attribute dictionary, canonical-operand-Values)`. The pool's
-// block argument is the canonical root. The whole point of `pdl_constr` is
+// block argument is the canonical root. The whole point of `match` is
 // that predicates and their dependency edges live in SSA; this pass leans on
 // that directly:
 //
@@ -30,10 +30,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/PDLConstr/Transforms/Passes.h"
+#include "mlir/Dialect/Match/Transforms/Passes.h"
 
-#include "mlir/Dialect/PDLConstr/IR/PDLConstr.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.h"
+#include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/Match/IR/MatchOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "llvm/ADT/DenseMap.h"
@@ -43,17 +43,17 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugLog.h"
 
-#define DEBUG_TYPE "pdl-constr-combine-matchers"
+#define DEBUG_TYPE "match-combine-matchers"
 
 namespace mlir {
-namespace pdl_constr {
-#define GEN_PASS_DEF_PDLCONSTRCOMBINEMATCHERSPASS
-#include "mlir/Dialect/PDLConstr/Transforms/Passes.h.inc"
-} // namespace pdl_constr
+namespace match {
+#define GEN_PASS_DEF_MATCHCOMBINEMATCHERSPASS
+#include "mlir/Dialect/Match/Transforms/Passes.h.inc"
+} // namespace match
 } // namespace mlir
 
 using namespace mlir;
-using namespace mlir::pdl_constr;
+using namespace mlir::match;
 
 namespace {
 
@@ -100,7 +100,7 @@ namespace {
 struct MatcherInfo {
   MatcherOp matcher;
 
-  /// The (unique) `pdl_constr.success` op in this matcher.
+  /// The (unique) `match.success` op in this matcher.
   SuccessOp success;
 
   /// Set of canonical pool ops this matcher exercises.
@@ -233,7 +233,7 @@ LogicalResult Combiner::buildCanonicalPool() {
       if (auto succ = dyn_cast<SuccessOp>(&op)) {
         if (info.success)
           return op.emitOpError("combine-matchers expects exactly one "
-                                "`pdl_constr.success` per input matcher");
+                                "`match.success` per input matcher");
         info.success = succ;
         continue;
       }
@@ -265,7 +265,7 @@ LogicalResult Combiner::buildCanonicalPool() {
 
     if (!info.success)
       return matcher.emitOpError(
-          "combine-matchers expects a `pdl_constr.success` in every input "
+          "combine-matchers expects a `match.success` in every input "
           "matcher");
 
     matcherInfos.push_back(std::move(info));
@@ -341,7 +341,7 @@ static unsigned getPosKind(Value val) {
       .Case<GetValueTypeOp, GetAttributeTypeOp>(
           [](auto) { return 7u; /* TypePos */ })
       // AttributeLiteralPos = 8 / TypeLiteralPos = 9 not represented in
-      // pdl_constr yet — extend here if/when literal accessor ops are added.
+      // match yet — extend here if/when literal accessor ops are added.
       .Case<GetUsersOp>([](auto) { return 10u; /* UsersPos */ })
       .Case<GetEachOp>([](auto) { return 11u; /* ForEachPos */ })
       .Default([](Operation *) { return 12u; /* unknown */ });
@@ -551,7 +551,7 @@ void Combiner::emitNode(OpBuilder &builder, Location loc, TreeNode *node,
   // Walk down the failure-spine chain, emitting siblings sequentially in the
   // current scope. A Success node emits its success op and continues with
   // the next alternative; a Test node either wraps its test + success path
-  // in a `pdl_constr.try` (so failure transfers to the next sibling) or
+  // in a `match.try` (so failure transfers to the next sibling) or
   // emits the test bare when it's the only alternative at this scope.
   // `builder.clone(*pred, mapping)` reuses the canonical pool op as a
   // template and records the new SSA Values in `mapping`.
@@ -603,9 +603,9 @@ void Combiner::emitNode(OpBuilder &builder, Location loc, TreeNode *node,
 // Switch folding
 //
 // After tree emission, sibling `try` blocks at the same scope level that all
-// start with a `pdl_constr.has_name` (or `pdl_constr.has_type`) on the same
-// operand are folded into a single `pdl_constr.switch_op_name` (or
-// `pdl_constr.switch_type`). Mirrors SwitchNode emission in PredicateTree.cpp.
+// start with a `match.has_name` (or `match.has_type`) on the same
+// operand are folded into a single `match.switch_op_name` (or
+// `match.switch_type`). Mirrors SwitchNode emission in PredicateTree.cpp.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -727,8 +727,8 @@ void Combiner::foldSwitches(Region &region) {
 // `get_result`, ...) at the top of the matcher, ahead of the tests that
 // consume them. Navigation ops are pure value-producers with no failure /
 // control-flow effect, so they can be sunk down to just before their first
-// use. This makes the placement explicit in `pdl_constr` and lets the
-// `pdl_constr -> pdl_interp` lowering be a straightforward program-order
+// use. This makes the placement explicit in `match` and lets the
+// `match -> pdl_interp` lowering be a straightforward program-order
 // translation that still matches the original `pdl -> pdl_interp` output
 // (where `get_*` ops are emitted just-in-time into the block that consumes
 // them).
@@ -938,7 +938,7 @@ LogicalResult Combiner::run() {
 
 namespace {
 struct CombineMatchersPass
-    : public mlir::pdl_constr::impl::PDLConstrCombineMatchersPassBase<
+    : public mlir::match::impl::MatchCombineMatchersPassBase<
           CombineMatchersPass> {
   void runOnOperation() final {
     Combiner combiner(getOperation());

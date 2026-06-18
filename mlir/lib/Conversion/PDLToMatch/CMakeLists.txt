@@ -1,8 +1,8 @@
-add_mlir_conversion_library(MLIRPDLToPDLConstr
-  PDLToPDLConstr.cpp
+add_mlir_conversion_library(MLIRPDLToMatch
+  PDLToMatch.cpp
 
   ADDITIONAL_HEADER_DIRS
-  ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/PDLToPDLConstr
+  ${MLIR_MAIN_INCLUDE_DIR}/mlir/Conversion/PDLToMatch
 
   DEPENDS
   MLIRConversionPassIncGen
@@ -10,7 +10,7 @@ add_mlir_conversion_library(MLIRPDLToPDLConstr
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPDLDialect
-  MLIRPDLConstrDialect
+  MLIRMatchDialect
   MLIRPDLInterpDialect
   MLIRPDLToPDLInterp
   MLIRPass

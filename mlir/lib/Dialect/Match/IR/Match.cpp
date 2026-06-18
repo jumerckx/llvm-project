@@ -1,4 +1,4 @@
-//===- PDLConstr.cpp - PDL Constraint Dialect -------------------*- C++ -*-===//
+//===- Match.cpp - PDL Constraint Dialect -------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,27 +6,27 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/PDLConstr/IR/PDLConstr.h"
+#include "mlir/Dialect/Match/IR/Match.h"
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.h"
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrTypes.h"
+#include "mlir/Dialect/Match/IR/MatchOps.h"
+#include "mlir/Dialect/Match/IR/MatchTypes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
-using namespace mlir::pdl_constr;
+using namespace mlir::match;
 
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOpsDialect.cpp.inc"
+#include "mlir/Dialect/Match/IR/MatchOpsDialect.cpp.inc"
 
 //===----------------------------------------------------------------------===//
-// PDLConstrDialect
+// MatchDialect
 //===----------------------------------------------------------------------===//
 
-void PDLConstrDialect::initialize() {
+void MatchDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.cpp.inc"
+#include "mlir/Dialect/Match/IR/MatchOps.cpp.inc"
       >();
   registerTypes();
 }
@@ -36,12 +36,12 @@ void PDLConstrDialect::initialize() {
 //===----------------------------------------------------------------------===//
 
 #define GET_TYPEDEF_CLASSES
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOpsTypes.cpp.inc"
+#include "mlir/Dialect/Match/IR/MatchOpsTypes.cpp.inc"
 
-void PDLConstrDialect::registerTypes() {
+void MatchDialect::registerTypes() {
   addTypes<
 #define GET_TYPEDEF_LIST
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOpsTypes.cpp.inc"
+#include "mlir/Dialect/Match/IR/MatchOpsTypes.cpp.inc"
       >();
 }
 
@@ -54,7 +54,7 @@ OptionalType::verify(function_ref<InFlightDiagnostic()> emitError,
                      Type innerType) {
   if (!llvm::isa<pdl::PDLType>(innerType)) {
     return emitError()
-           << "expected inner type of pdl_constr.optional to be a PDL type "
+           << "expected inner type of match.optional to be a PDL type "
               "(one of [!pdl.attribute, !pdl.operation, !pdl.type, "
               "!pdl.value, !pdl.range<...>]), but got "
            << innerType;
@@ -108,17 +108,17 @@ LogicalResult MatcherOp::verifyRegions() {
     return emitOpError(
         "expected body block argument to be of type !pdl.operation");
 
-  // Verify the matcher contains at least one `pdl_constr.success` op
+  // Verify the matcher contains at least one `match.success` op
   // somewhere in its region tree.
   if (!regionContainsSuccess(body))
     return emitOpError("expected matcher to contain at least one "
-                       "`pdl_constr.success` (directly or transitively)");
+                       "`match.success` (directly or transitively)");
 
   return success();
 }
 
 StringRef MatcherOp::getDefaultDialect() {
-  return PDLConstrDialect::getDialectNamespace();
+  return MatchDialect::getDialectNamespace();
 }
 
 //===----------------------------------------------------------------------===//
@@ -129,14 +129,14 @@ LogicalResult TryOp::verifyRegions() {
   // A `try` region with no transitive success op is dead; reject it so that
   // the IR is meaningful.
   if (!regionContainsSuccess(getBody()))
-    return emitOpError("`pdl_constr.try` region contains no "
-                       "`pdl_constr.success` (directly or transitively); the "
+    return emitOpError("`match.try` region contains no "
+                       "`match.success` (directly or transitively); the "
                        "region is dead");
   return success();
 }
 
 StringRef TryOp::getDefaultDialect() {
-  return PDLConstrDialect::getDialectNamespace();
+  return MatchDialect::getDialectNamespace();
 }
 
 //===----------------------------------------------------------------------===//
@@ -245,7 +245,7 @@ LogicalResult SwitchOpNameOp::verify() {
 }
 
 StringRef SwitchOpNameOp::getDefaultDialect() {
-  return PDLConstrDialect::getDialectNamespace();
+  return MatchDialect::getDialectNamespace();
 }
 
 //===----------------------------------------------------------------------===//
@@ -305,7 +305,7 @@ LogicalResult SwitchTypeOp::verify() {
 }
 
 StringRef SwitchTypeOp::getDefaultDialect() {
-  return PDLConstrDialect::getDialectNamespace();
+  return MatchDialect::getDialectNamespace();
 }
 
 //===----------------------------------------------------------------------===//
@@ -360,7 +360,7 @@ LogicalResult SuccessOp::verify() {
   // Must be inside a matcher (possibly via nested try / switch regions).
   if (!(*this)->getParentOfType<MatcherOp>())
     return emitOpError(
-        "`pdl_constr.success` must be enclosed by a `pdl_constr.matcher`");
+        "`match.success` must be enclosed by a `match.matcher`");
   return success();
 }
 
@@ -381,4 +381,4 @@ SuccessOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 //===----------------------------------------------------------------------===//
 
 #define GET_OP_CLASSES
-#include "mlir/Dialect/PDLConstr/IR/PDLConstrOps.cpp.inc"
+#include "mlir/Dialect/Match/IR/MatchOps.cpp.inc"
