@@ -29,10 +29,14 @@
 #include "mlir/Dialect/Match/IR/Match.h"
 #include "mlir/Dialect/Match/IR/MatchOps.h"
 #include "mlir/Dialect/Match/IR/MatchTypes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
@@ -156,6 +160,31 @@ std::string MatcherCppEmitter::cppType(Type t) {
 }
 
 std::string MatcherCppEmitter::typeLiteral(Type t) {
+  // For common builtin types, emit a direct construction call instead of
+  // round-tripping through the parser.
+  if (auto it = dyn_cast<IntegerType>(t)) {
+    std::string str;
+    llvm::raw_string_ostream ss(str);
+    ss << "::mlir::IntegerType::get(op->getContext(), " << it.getWidth();
+    if (it.isSigned())
+      ss << ", ::mlir::IntegerType::Signed";
+    else if (it.isUnsigned())
+      ss << ", ::mlir::IntegerType::Unsigned";
+    ss << ")";
+    return str;
+  }
+  if (isa<IndexType>(t))
+    return "::mlir::IndexType::get(op->getContext())";
+  if (isa<BFloat16Type>(t))
+    return "::mlir::BFloat16Type::get(op->getContext())";
+  if (isa<Float16Type>(t))
+    return "::mlir::Float16Type::get(op->getContext())";
+  if (isa<Float32Type>(t))
+    return "::mlir::Float32Type::get(op->getContext())";
+  if (isa<Float64Type>(t))
+    return "::mlir::Float64Type::get(op->getContext())";
+
+  // Fall back to parsing the printed form for everything else.
   std::string str;
   llvm::raw_string_ostream ss(str);
   t.print(ss);
@@ -165,6 +194,55 @@ std::string MatcherCppEmitter::typeLiteral(Type t) {
 }
 
 std::string MatcherCppEmitter::attrLiteral(Attribute a) {
+  // For common builtin attributes, emit a direct construction call instead of
+  // round-tripping through the parser.
+  if (auto ia = dyn_cast<IntegerAttr>(a)) {
+    APInt v = ia.getValue();
+    if (v.getBitWidth() <= 64) {
+      std::string str;
+      llvm::raw_string_ostream ss(str);
+      ss << "::mlir::IntegerAttr::get(" << typeLiteral(ia.getType()) << ", ";
+      if (ia.getType().isUnsignedInteger())
+        ss << v.getZExtValue() << "u";
+      else if (v.getBitWidth() == 1)
+        // i1 (incl. booleans): emit 0/1 rather than the sign-extended -1.
+        ss << v.getZExtValue();
+      else
+        ss << v.getSExtValue();
+      ss << ")";
+      return str;
+    }
+  }
+  if (auto fa = dyn_cast<FloatAttr>(a)) {
+    // inf/nan print as bare `inf`/`nan`, which are not C++ literals; let those
+    // fall through to the parser.
+    if (fa.getValue().isFinite()) {
+      std::string str;
+      llvm::raw_string_ostream ss(str);
+      // 17 significant digits round-trip an IEEE double exactly.
+      ss << "::mlir::FloatAttr::get(" << typeLiteral(fa.getType()) << ", "
+         << llvm::format("%.17g", fa.getValueAsDouble()) << ")";
+      return str;
+    }
+  }
+  if (auto sa = dyn_cast<StringAttr>(a)) {
+    // Only the common no-type case maps cleanly onto StringAttr::get(ctx, str).
+    if (isa<NoneType>(sa.getType())) {
+      std::string str;
+      llvm::raw_string_ostream ss(str);
+      ss << "::mlir::StringAttr::get(op->getContext(), \"";
+      llvm::printEscapedString(sa.getValue(), ss);
+      ss << "\")";
+      return str;
+    }
+  }
+  if (auto ta = dyn_cast<TypeAttr>(a))
+    return (Twine("::mlir::TypeAttr::get(") + typeLiteral(ta.getValue()) + ")")
+        .str();
+  if (isa<UnitAttr>(a))
+    return "::mlir::UnitAttr::get(op->getContext())";
+
+  // Fall back to parsing the printed form for everything else.
   std::string str;
   llvm::raw_string_ostream ss(str);
   a.print(ss);
