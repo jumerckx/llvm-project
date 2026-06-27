@@ -21,6 +21,7 @@ add_mlir_library(MLIRTestMatchToCpp
   MLIRTestMatchToCppPatternsIncGen
   )
 mlir_target_link_libraries(MLIRTestMatchToCpp PUBLIC
+  MLIRArithDialect
   MLIRIR
   MLIRPass
   MLIRSupport

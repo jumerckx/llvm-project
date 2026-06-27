@@ -10,6 +10,7 @@ module {
   module @rewriters {
     module @rename {}
     module @swap {}
+    module @lower_addf {}
   }
 
   // Rename any `test.original` to `test.renamed`, forwarding the matched op.
@@ -28,5 +29,18 @@ module {
     %1 = match.get_operand 1 of %root : !match.optional<!pdl.value>
     %b = match.is_not_null %1 : !match.optional<!pdl.value> -> !pdl.value
     match.success @rewriters::@swap benefit(1) (%root, %a, %b : !pdl.operation, !pdl.value, !pdl.value)
+  }
+
+  // Match the *registered* `arith.addf`: this exercises the concrete-op path
+  // (dyn_cast<arith::AddFOp>, fixed-count operand navigation) end to end. The
+  // hook rebuilds it as `test.lowered_addf` so the driver reaches a fixed point.
+  match.matcher @addf_matcher root(%root : !pdl.operation) {
+    match.has_name %root, "arith.addf"
+    match.check_operand_count %root is 2
+    %0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
+    %a = match.is_not_null %0 : !match.optional<!pdl.value> -> !pdl.value
+    %1 = match.get_operand 1 of %root : !match.optional<!pdl.value>
+    %b = match.is_not_null %1 : !match.optional<!pdl.value> -> !pdl.value
+    match.success @rewriters::@lower_addf benefit(1) (%root, %a, %b : !pdl.operation, !pdl.value, !pdl.value)
   }
 }
