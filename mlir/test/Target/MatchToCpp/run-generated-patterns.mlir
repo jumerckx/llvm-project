@@ -37,3 +37,15 @@ func.func @untouched(%arg0: i32) -> i32 {
   %0 = "test.keep"(%arg0) : (i32) -> i32
   return %0 : i32
 }
+
+// The `addf_matcher` matches the *registered* `arith.addf` via the concrete-op
+// path (dyn_cast<arith::AddFOp>) and rebuilds it forwarding both operands.
+// CHECK-LABEL: func @lower_addf
+// CHECK-SAME:    (%[[A:.*]]: f32, %[[B:.*]]: f32)
+// CHECK:         %[[R:.*]] = "test.lowered_addf"(%[[A]], %[[B]]) : (f32, f32) -> f32
+// CHECK-NOT:     arith.addf
+// CHECK:         return %[[R]]
+func.func @lower_addf(%a: f32, %b: f32) -> f32 {
+  %0 = arith.addf %a, %b : f32
+  return %0 : f32
+}

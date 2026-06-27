@@ -53,6 +53,17 @@ using namespace mlir;
   return success();
 }
 
+::llvm::LogicalResult rewrite_lower_addf(::mlir::PatternRewriter &rewriter,
+                                         ::mlir::Operation *op, ::mlir::Value a,
+                                         ::mlir::Value b) {
+  OperationState state(op->getLoc(), "test.lowered_addf");
+  state.addOperands({a, b});
+  state.addTypes(op->getResultTypes());
+  Operation *newOp = rewriter.create(state);
+  rewriter.replaceOp(op, newOp->getResults());
+  return success();
+}
+
 // Pulls in `populateGeneratedPatterns(RewritePatternSet &)` and the generated
 // `GeneratedMatcher_*` structs produced from TestMatchToCppPatterns.mlir.
 #include "TestMatchToCppPatterns.h.inc"

@@ -1,6 +1,9 @@
 // RUN: mlir-translate --match-to-cpp %s | FileCheck %s
 
-// A flat matcher: op-name + operand-count tests, one navigation, one success.
+// A flat matcher on a *registered* op (arith.addf): because the concrete C++
+// class is known, the op-name test becomes a `dyn_cast`, the operand-count test
+// is elided (AddFOp always has two operands), operand navigation drops its
+// bounds check, and `is_not_null` collapses to an alias.
 
 module {
   // The rewriter symbols referenced by `success` only need to resolve; here we
@@ -18,19 +21,20 @@ module {
   }
 }
 
+// The generated matcher must pull in the op's header.
+// CHECK: #include "mlir/Dialect/Arith/IR/Arith.h"
 // CHECK: ::llvm::LogicalResult rewrite_addf(::mlir::PatternRewriter &rewriter, ::mlir::Operation *, ::mlir::Value);
 // CHECK: struct GeneratedMatcher_0 : public ::mlir::RewritePattern
-// CHECK: ::mlir::RewritePattern(::mlir::Pattern::MatchAnyOpTypeTag(), 1, context)
 // CHECK: matchAndRewrite(::mlir::Operation *op,
-// CHECK:   if (op->getName().getStringRef() != "arith.addf")
+// dyn_cast subsumes the name test.
+// CHECK:   ::mlir::arith::AddFOp castedOp0 = ::llvm::dyn_cast<::mlir::arith::AddFOp>(op);
+// CHECK:   if (!castedOp0)
 // CHECK:     return ::mlir::failure();
-// CHECK:   if (op->getNumOperands() != 2)
-// CHECK:     return ::mlir::failure();
-// CHECK:   ::mlir::Value v0 = (0 < op->getNumOperands()) ? op->getOperand(0) : ::mlir::Value();
-// CHECK:   if (!v0)
-// CHECK:     return ::mlir::failure();
+// No operand-count check is emitted (AddFOp has a fixed operand count of 2).
+// CHECK-NOT: getNumOperands()
+// In-range operand navigation needs no bounds check and is never null.
+// CHECK:   ::mlir::Value v1 = castedOp0.getOperation()->getOperand(0);
+// CHECK-NOT: if (!v1)
 // CHECK:   rewriter.setInsertionPoint(op);
-// CHECK:   if (::mlir::succeeded(rewrite_addf(rewriter, op, v0)))
+// CHECK:   if (::mlir::succeeded(rewrite_addf(rewriter, op, v1)))
 // CHECK:     return ::mlir::success();
-// CHECK: void populateGeneratedPatterns(::mlir::RewritePatternSet &set) {
-// CHECK:   set.add<GeneratedMatcher_0>(set.getContext());
