@@ -39,7 +39,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugLog.h"
 
@@ -316,163 +315,23 @@ static void stableTopologicalSort(Iterator begin, Iterator end, Compare cmp) {
   }
 }
 
-/// Infers the equivalent PDL Position::Kind integer of the given value.
-/// Numeric values match `Predicates::Kind` in
-/// mlir/lib/Conversion/PDLToPDLInterp/Predicate.h so that tie-breaking in the
-/// cost comparator matches the original pass byte-for-byte.
-static unsigned getPosKind(Value val) {
-  // The matcher root block argument is the canonical root operation.
-  if (isa<BlockArgument>(val))
-    return 0u; // OperationPos
-
-  Operation *def = val.getDefiningOp();
-  if (!def)
-    return 12u; // sentinel above all real kinds
-
-  return TypeSwitch<Operation *, unsigned>(def)
-      .Case<GetDefiningOpOp>([](auto) { return 0u; /* OperationPos */ })
-      .Case<GetOperandOp>([](auto) { return 1u; /* OperandPos */ })
-      .Case<GetOperandsOp>([](auto) { return 2u; /* OperandGroupPos */ })
-      .Case<GetAttributeOp>([](auto) { return 3u; /* AttributePos */ })
-      .Case<ApplyNativeConstraintOp>(
-          [](auto) { return 4u; /* ConstraintResultPos */ })
-      .Case<GetResultOp>([](auto) { return 5u; /* ResultPos */ })
-      .Case<GetResultsOp>([](auto) { return 6u; /* ResultGroupPos */ })
-      .Case<GetValueTypeOp, GetAttributeTypeOp>(
-          [](auto) { return 7u; /* TypePos */ })
-      // AttributeLiteralPos = 8 / TypeLiteralPos = 9 not represented in
-      // match yet — extend here if/when literal accessor ops are added.
-      .Case<GetUsersOp>([](auto) { return 10u; /* UsersPos */ })
-      .Case<GetEachOp>([](auto) { return 11u; /* ForEachPos */ })
-      .Default([](Operation *) { return 12u; /* unknown */ });
-}
-
-/// Infers the equivalent PDL Qualifier::Kind integer of the given op.
-/// Numeric values match the question half of `Predicates::Kind` in
-/// mlir/lib/Conversion/PDLToPDLInterp/Predicate.h. Accessor ops return 0 so
-/// they naturally sort before any real predicate (all of which are >= 12).
-static unsigned getQuestKind(Operation *op) {
-  return TypeSwitch<Operation *, unsigned>(op)
-      .Case<IsNotNullOp>([](auto) { return 12u; /* IsNotNullQuestion */ })
-      .Case<HasNameOp>([](auto) { return 13u; /* OperationNameQuestion */ })
-      .Case<HasTypeOp, HasTypesOp>([](auto) { return 14u; /* TypeQuestion */ })
-      .Case<HasAttrValueOp>([](auto) { return 15u; /* AttributeQuestion */ })
-      .Case<CheckOperandCountOp>([](auto countOp) {
-        // OperandCountAtLeastQuestion = 16, OperandCountQuestion = 17.
-        return countOp.getAtLeast() ? 16u : 17u;
-      })
-      .Case<CheckResultCountOp>([](auto countOp) {
-        // ResultCountAtLeastQuestion = 18, ResultCountQuestion = 19.
-        return countOp.getAtLeast() ? 18u : 19u;
-      })
-      .Case<EqualOp>([](auto) { return 20u; /* EqualToQuestion */ })
-      .Case<ApplyNativeConstraintOp>(
-          [](auto) { return 21u; /* ConstraintQuestion */ })
-      .Default([](Operation *) { return 0u; /* accessor — sorts first */ });
-}
-
-/// Recursively computes the OperationDepth by walking the SSA use-def chain.
-static unsigned getOperationDepth(Value val, DenseMap<Value, unsigned> &cache) {
-  if (auto it = cache.find(val); it != cache.end())
-    return it->second;
-
-  if (isa<BlockArgument>(val))
-    return cache[val] = 0u;
-
-  Operation *def = val.getDefiningOp();
-  if (!def)
-    return cache[val] = 0u;
-
-  return TypeSwitch<Operation *, unsigned>(def)
-      .Case<ApplyNativeConstraintOp>([&](auto constraintOp) {
-        // Constraints anchor their depth to the maximum depth of their arguments.
-        unsigned maxDepth = 0u;
-        for (Value operand : constraintOp.getArgs())
-          maxDepth = std::max(maxDepth, getOperationDepth(operand, cache));
-        return cache[val] = maxDepth;
-      })
-      .Default([&](Operation *op) {
-        if (op->getNumOperands() == 0)
-          return cache[val] = 0u;
-
-        unsigned parentDepth = getOperationDepth(op->getOperand(0), cache);
-
-        // Reaching a new structural Operation boundary increments the depth.
-        if (getPosKind(val) == 0 /* OperationPos */)
-          return cache[val] = parentDepth + 1;
-
-        return cache[val] = parentDepth;
-      });
-}
-
-/// Gets the depth of the position this predicate acts upon.
-static unsigned getPredicateDepth(Operation *op, DenseMap<Value, unsigned> &cache) {
-  return TypeSwitch<Operation *, unsigned>(op)
-      .Case<ApplyNativeConstraintOp>([&](auto constraintOp) {
-        unsigned maxDepth = 0;
-        for (Value operand : constraintOp.getArgs())
-          maxDepth = std::max(maxDepth, getOperationDepth(operand, cache));
-        return maxDepth;
-      })
-      .Default([&](Operation *defaultOp) {
-        if (defaultOp->getNumOperands() > 0)
-          return getOperationDepth(defaultOp->getOperand(0), cache);
-        return 0u;
-      });
-}
-
-/// Gets the equivalent Position::Kind this predicate acts upon.
-static unsigned getPredicatePosKind(Operation *op, DenseMap<Value, unsigned> &cache) {
-  return TypeSwitch<Operation *, unsigned>(op)
-      .Case<ApplyNativeConstraintOp>([&](auto constraintOp) {
-        Value maxVal = nullptr;
-        unsigned maxD = 0;
-        for (Value operand : constraintOp.getArgs()) {
-          unsigned d = getOperationDepth(operand, cache);
-          if (!maxVal || d > maxD) {
-            maxVal = operand;
-            maxD = d;
-          }
-        }
-        if (maxVal) return getPosKind(maxVal);
-        return 12u; // sentinel past all position kinds
-      })
-      .Default([&](Operation *defaultOp) {
-        if (defaultOp->getNumOperands() > 0)
-          return getPosKind(defaultOp->getOperand(0));
-        return 12u; // sentinel past all position kinds
-      });
-}
-
 void Combiner::sortCanonicalPool() {
   sortedPoolOps.reserve(poolDedup.size());
   for (Operation &op : *poolBody)
     sortedPoolOps.push_back(&op);
 
-  DenseMap<Value, unsigned> depthsCache;
-
-  // Cost-based sort matching PredicateTree's OrderedPredicate cost model exactly.
-  // Higher frequency wins. When tied, smaller depth/position/question/ID wins.
+  // Frequency-based cost sort: a predicate that occurs in more
+  // matchers (primary), and is more commonly shared *within* a matcher
+  // (secondary), is checked earlier so common prefixes merge in the
+  // `try`-tree.
   llvm::sort(sortedPoolOps, [&](Operation *a, Operation *b) {
-    unsigned depthA = getPredicateDepth(a, depthsCache);
-    unsigned depthB = getPredicateDepth(b, depthsCache);
-    unsigned posKA = getPredicatePosKind(a, depthsCache);
-    unsigned posKB = getPredicatePosKind(b, depthsCache);
-    unsigned questKA = getQuestKind(a);
-    unsigned questKB = getQuestKind(b);
-
-    return std::make_tuple(primary[a], secondary[a],
-                           depthB, posKB, questKB, insertionIndex[b]) >
-           std::make_tuple(primary[b], secondary[b],
-                           depthA, posKA, questKA, insertionIndex[a]);
+    return std::make_tuple(primary[a], secondary[a], insertionIndex[b]) >
+           std::make_tuple(primary[b], secondary[b], insertionIndex[a]);
   });
 
   LDBG() << "Sorted predicates (after cost sort):";
   for (Operation *op : sortedPoolOps) {
     LDBG() << "  * primary=" << primary[op] << " secondary=" << secondary[op]
-           << " depth=" << getPredicateDepth(op, depthsCache)
-           << " posKind=" << getPredicatePosKind(op, depthsCache)
-           << " questKind=" << getQuestKind(op)
            << " id=" << insertionIndex[op] << " op=" << op->getName();
   }
 
@@ -483,9 +342,6 @@ void Combiner::sortCanonicalPool() {
   LDBG() << "Sorted predicates (after topological sort):";
   for (Operation *op : sortedPoolOps) {
     LDBG() << "  * primary=" << primary[op] << " secondary=" << secondary[op]
-           << " depth=" << getPredicateDepth(op, depthsCache)
-           << " posKind=" << getPredicatePosKind(op, depthsCache)
-           << " questKind=" << getQuestKind(op)
            << " id=" << insertionIndex[op] << " op=" << op->getName();
   }
 
