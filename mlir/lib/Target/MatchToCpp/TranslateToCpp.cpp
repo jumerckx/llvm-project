@@ -33,6 +33,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -40,6 +41,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
+#include <set>
 
 using namespace mlir;
 using namespace mlir::match;
@@ -49,7 +51,8 @@ namespace {
 /// Walks a `match.matcher` region and emits a C++ `RewritePattern`.
 class MatcherCppEmitter {
 public:
-  explicit MatcherCppEmitter(raw_ostream &os) : os(os) {}
+  MatcherCppEmitter(raw_ostream &os, const OpInfoRegistry &registry)
+      : os(os), registry(registry) {}
 
   LogicalResult emitModule(Operation *root);
 
@@ -104,6 +107,13 @@ private:
   /// Emit a single non-`get_each` op.
   LogicalResult emitSingle(Operation *op, StringRef failAction);
 
+  /// Emit a cast of operation value `op` to its concrete class and record the
+  /// binding. If `alreadyKnownName` (e.g. inside a matched `switch_op_name`
+  /// case), emit an unchecked `cast`; otherwise `dyn_cast` with a null check
+  /// transferring to `failAction`.
+  void bindConcrete(Value op, const OpInfo &info, bool alreadyKnownName,
+                    StringRef failAction);
+
   LogicalResult emitTry(TryOp op);
   LogicalResult emitSwitchOpName(SwitchOpNameOp op, StringRef failAction);
   LogicalResult emitSwitchType(SwitchTypeOp op, StringRef failAction);
@@ -116,13 +126,40 @@ private:
     return ops;
   }
 
+  //===--------------------------------------------------------------------===//
+  // Concrete-op binding
+  //===--------------------------------------------------------------------===//
+
+  /// A `!pdl.operation` value whose concrete C++ op class is statically known,
+  /// together with the name of the casted C++ handle (e.g. "castedOp0").
+  struct ConcreteBinding {
+    const OpInfo *info;
+    std::string var;
+  };
+
+  /// Returns the concrete binding for `v`, or null if `v` is only known as a
+  /// generic `Operation *`.
+  const ConcreteBinding *concreteOf(Value v) const {
+    auto it = concrete.find(v);
+    return it == concrete.end() ? nullptr : &it->second;
+  }
+
   raw_ostream &os;
+  const OpInfoRegistry &registry;
   DenseMap<Value, std::string> names;
+  /// Operation values whose concrete C++ class is statically known.
+  DenseMap<Value, ConcreteBinding> concrete;
+  /// Values a concrete navigation step proved non-null, so the subsequent
+  /// `is_not_null` collapses to an alias.
+  DenseSet<Value> knownNonNull;
   unsigned counter = 0;
   unsigned indentLevel = 0;
   /// Set when an indexed operand/result group is emitted, so the supporting
   /// `__pdl_get_group` helper is emitted into the file.
   bool needsGroupHelper = false;
+  /// Headers the generated matcher must `#include` to see the concrete op
+  /// classes referenced by `dyn_cast`. Deterministic (sorted) emission order.
+  std::set<std::string> neededIncludes;
   /// Forward declarations for the extern rewrite hooks, keyed by function name
   /// so repeated references collapse to one declaration. `std::map` gives a
   /// deterministic (alphabetical) emission order.
@@ -255,6 +292,27 @@ std::string MatcherCppEmitter::attrLiteral(Attribute a) {
 // Emission
 //===----------------------------------------------------------------------===//
 
+void MatcherCppEmitter::bindConcrete(Value op, const OpInfo &info,
+                                     bool alreadyKnownName,
+                                     StringRef failAction) {
+  std::string casted = freshId("castedOp");
+  StringRef cls = info.cppClassName;
+  if (alreadyKnownName) {
+    indent() << cls << " " << casted << " = ::llvm::cast<" << cls << ">("
+             << getName(op) << ");\n";
+    // The handle may be unused if the case body performs no typed navigation.
+    indent() << "(void)" << casted << ";\n";
+  } else {
+    indent() << cls << " " << casted << " = ::llvm::dyn_cast<" << cls << ">("
+             << getName(op) << ");\n";
+    indent() << "if (!" << casted << ")\n";
+    indent() << "  " << failAction << "\n";
+  }
+  concrete[op] = ConcreteBinding{&info, casted};
+  if (!info.headerInclude.empty())
+    neededIncludes.insert(info.headerInclude.str());
+}
+
 LogicalResult MatcherCppEmitter::emitSuccess(SuccessOp op, StringRef failAction) {
   // Derive the extern rewrite hook name from the leaf of the symbol reference.
   StringRef leaf = op.getRewriter().getLeafReference().getValue();
@@ -309,8 +367,29 @@ LogicalResult MatcherCppEmitter::emitSwitchOpName(SwitchOpNameOp op,
     indent() << (j == 0 ? "if" : "else if") << " (" << nameVar << " == \""
              << caseName << "\") {\n";
     ++indentLevel;
+    // Inside a matched case the op name is known, so bind a concrete handle
+    // (an unchecked `cast`) for the duration of this case region. Snapshot any
+    // prior binding by value: `bindConcrete` inserts into `concrete`, which can
+    // rehash and invalidate an iterator held across the call.
+    bool bound = false;
+    bool hadPrev = false;
+    ConcreteBinding saved{};
+    if (auto prev = concrete.find(op.getOp()); prev != concrete.end()) {
+      hadPrev = true;
+      saved = prev->second;
+    }
+    if (const OpInfo *info = registry.lookup(caseName)) {
+      bindConcrete(op.getOp(), *info, /*alreadyKnownName=*/true, failAction);
+      bound = true;
+    }
     if (failed(emitOpSequence(opsOf(region), failAction)))
       return failure();
+    if (bound) {
+      if (hadPrev)
+        concrete[op.getOp()] = saved;
+      else  
+        concrete.erase(op.getOp());
+    }
     --indentLevel;
     indent() << "}\n";
   }
@@ -361,6 +440,18 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
       .Case<GetOperandOp>([&](GetOperandOp o) {
         std::string opName = getName(o.getOp());
         std::string v = declareName(o.getResult());
+        // On a concrete op with a statically fixed operand count, an in-range
+        // operand is always present: drop the bounds check and the null state.
+        if (const ConcreteBinding *b = concreteOf(o.getOp())) {
+          if (auto fixed = b->info->getFixedNumOperands();
+              fixed && o.getIndex() < *fixed) {
+            indent() << "::mlir::Value " << v << " = " << b->var
+                     << ".getOperation()->getOperand(" << o.getIndex()
+                     << ");\n";
+            knownNonNull.insert(o.getResult());
+            return success();
+          }
+        }
         indent() << "::mlir::Value " << v << " = (" << o.getIndex() << " < "
                  << opName << "->getNumOperands()) ? " << opName
                  << "->getOperand(" << o.getIndex() << ") : ::mlir::Value();\n";
@@ -369,6 +460,16 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
       .Case<GetResultOp>([&](GetResultOp o) {
         std::string opName = getName(o.getOp());
         std::string v = declareName(o.getResult());
+        if (const ConcreteBinding *b = concreteOf(o.getOp())) {
+          if (auto fixed = b->info->getFixedNumResults();
+              fixed && o.getIndex() < *fixed) {
+            indent() << "::mlir::Value " << v << " = " << b->var
+                     << ".getOperation()->getResult(" << o.getIndex()
+                     << ");\n";
+            knownNonNull.insert(o.getResult());
+            return success();
+          }
+        }
         indent() << "::mlir::Value " << v << " = (" << o.getIndex() << " < "
                  << opName << "->getNumResults()) ? " << opName
                  << "->getResult(" << o.getIndex() << ") : ::mlir::Value();\n";
@@ -377,6 +478,23 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
       .Case<GetOperandsOp>([&](GetOperandsOp o) {
         std::string opn = getName(o.getOp());
         std::string v = declareName(o.getResult());
+        // On a concrete op, the generated `getODSOperands(i)` accessor already
+        // resolves variadic/segment layout, so an in-range group access cannot
+        // fail: no `__pdl_get_group` helper and no null state.
+        if (const ConcreteBinding *b = concreteOf(o.getOp())) {
+          if (o.getIndex() && *o.getIndex() < b->info->numOperandGroups) {
+            indent() << "auto " << v << " = " << b->var << ".getODSOperands("
+                     << *o.getIndex() << ");\n";
+            knownNonNull.insert(o.getResult());
+            return success();
+          }
+          if (!o.getIndex()) {
+            indent() << "auto " << v << " = " << b->var
+                     << ".getOperation()->getOperands();\n";
+            knownNonNull.insert(o.getResult());
+            return success();
+          }
+        }
         if (o.getIndex()) {
           needsGroupHelper = true;
           indent() << "::std::optional<::mlir::ValueRange> " << v
@@ -394,6 +512,20 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
       .Case<GetResultsOp>([&](GetResultsOp o) {
         std::string opn = getName(o.getOp());
         std::string v = declareName(o.getResult());
+        if (const ConcreteBinding *b = concreteOf(o.getOp())) {
+          if (o.getIndex() && *o.getIndex() < b->info->numResultGroups) {
+            indent() << "auto " << v << " = " << b->var << ".getODSResults("
+                     << *o.getIndex() << ");\n";
+            knownNonNull.insert(o.getResult());
+            return success();
+          }
+          if (!o.getIndex()) {
+            indent() << "auto " << v << " = " << b->var
+                     << ".getOperation()->getResults();\n";
+            knownNonNull.insert(o.getResult());
+            return success();
+          }
+        }
         if (o.getIndex()) {
           needsGroupHelper = true;
           indent() << "::std::optional<::mlir::ValueRange> " << v
@@ -471,6 +603,12 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
       //===-- Tests ---------------------------------------------------------===//
       .Case<IsNotNullOp>([&](IsNotNullOp o) {
         std::string name = getName(o.getOptionalValue());
+        // A concrete navigation step already proved this non-null: the unwrap
+        // is a no-op alias (the variable already holds the bare value/range).
+        if (knownNonNull.contains(o.getOptionalValue())) {
+          mapName(o.getUnwrapped(), name);
+          return success();
+        }
         Type inner =
             cast<OptionalType>(o.getOptionalValue().getType()).getInnerType();
         if (isa<pdl::RangeType>(inner)) {
@@ -488,6 +626,14 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
         return success();
       })
       .Case<HasNameOp>([&](HasNameOp o) {
+        // When the op class is known, `dyn_cast` to it: the single null check
+        // subsumes the name test and binds a concrete handle for downstream
+        // typed, null-check-free navigation (the DRR shape).
+        if (const OpInfo *info = registry.lookup(o.getName())) {
+          bindConcrete(o.getOp(), *info, /*alreadyKnownName=*/false,
+                       failAction);
+          return success();
+        }
         fail(getName(o.getOp()) + "->getName().getStringRef() != \"" +
              o.getName().str() + "\"");
         return success();
@@ -528,11 +674,21 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
         return success();
       })
       .Case<CheckOperandCountOp>([&](CheckOperandCountOp o) {
+        // A concrete op with a statically fixed operand count makes this test
+        // provably true; elide it.
+        if (const ConcreteBinding *b = concreteOf(o.getOp()))
+          if (auto fixed = b->info->getFixedNumOperands())
+            if (o.getAtLeast() ? *fixed >= o.getCount() : *fixed == o.getCount())
+              return success();
         fail(Twine(getName(o.getOp())) + "->getNumOperands() " +
              (o.getAtLeast() ? "< " : "!= ") + Twine(o.getCount()));
         return success();
       })
       .Case<CheckResultCountOp>([&](CheckResultCountOp o) {
+        if (const ConcreteBinding *b = concreteOf(o.getOp()))
+          if (auto fixed = b->info->getFixedNumResults())
+            if (o.getAtLeast() ? *fixed >= o.getCount() : *fixed == o.getCount())
+              return success();
         fail(Twine(getName(o.getOp())) + "->getNumResults() " +
              (o.getAtLeast() ? "< " : "!= ") + Twine(o.getCount()));
         return success();
@@ -604,6 +760,8 @@ LogicalResult MatcherCppEmitter::emitOpSequence(ArrayRef<Operation *> ops,
 
 LogicalResult MatcherCppEmitter::emitMatcher(MatcherOp matcher, unsigned idx) {
   names.clear();
+  concrete.clear();
+  knownNonNull.clear();
   counter = 0;
 
   Block &body = matcher.getBodyRegion().front();
@@ -638,6 +796,26 @@ LogicalResult MatcherCppEmitter::emitMatcher(MatcherOp matcher, unsigned idx) {
 }
 
 LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
+  // Gather matchers.
+  SmallVector<MatcherOp> matchers;
+  root->walk([&](MatcherOp m) { matchers.push_back(m); });
+
+  // Emit the structs into a string first, so the collected hook declarations
+  // and the set of concrete-op headers can precede them in the file.
+  std::string structs;
+  {
+    llvm::raw_string_ostream structOs(structs);
+    MatcherCppEmitter sub(structOs, registry);
+    for (auto [idx, m] : llvm::enumerate(matchers))
+      if (failed(sub.emitMatcher(m, idx)))
+        return failure();
+    // Pull collected info out of the sub-emitter.
+    rewriterDecls = std::move(sub.rewriterDecls);
+    structNames = std::move(sub.structNames);
+    needsGroupHelper = sub.needsGroupHelper;
+    neededIncludes = std::move(sub.neededIncludes);
+  }
+
   // Header / preamble.
   os << "//===- Generated by mlir-translate --match-to-cpp. DO NOT EDIT. "
         "-===//\n";
@@ -651,25 +829,11 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
   os << "#include \"mlir/IR/PatternMatch.h\"\n";
   os << "#include \"mlir/Parser/Parser.h\"\n";
   os << "#include \"llvm/ADT/STLExtras.h\"\n";
-  os << "#include <optional>\n\n";
-
-  // Gather matchers.
-  SmallVector<MatcherOp> matchers;
-  root->walk([&](MatcherOp m) { matchers.push_back(m); });
-
-  // Emit the structs into a string so decls can precede them.
-  std::string structs;
-  {
-    llvm::raw_string_ostream structOs(structs);
-    MatcherCppEmitter sub(structOs);
-    for (auto [idx, m] : llvm::enumerate(matchers))
-      if (failed(sub.emitMatcher(m, idx)))
-        return failure();
-    // Pull collected info out of the sub-emitter.
-    rewriterDecls = std::move(sub.rewriterDecls);
-    structNames = std::move(sub.structNames);
-    needsGroupHelper = sub.needsGroupHelper;
-  }
+  os << "#include <optional>\n";
+  // Headers for the concrete op classes referenced by `dyn_cast`.
+  for (const std::string &inc : neededIncludes)
+    os << "#include \"" << inc << "\"\n";
+  os << "\n";
 
   // Supporting helper for indexed operand/result groups, mirroring the PDL
   // bytecode interpreter's `executeGetOperandsResults`.
@@ -721,7 +885,13 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
 // Public entry point
 //===----------------------------------------------------------------------===//
 
-LogicalResult mlir::match::translateToCpp(Operation *op, raw_ostream &os) {
-  MatcherCppEmitter emitter(os);
+LogicalResult mlir::match::translateToCpp(Operation *op, raw_ostream &os,
+                                          const OpInfoRegistry &registry) {
+  MatcherCppEmitter emitter(os, registry);
   return emitter.emitModule(op);
+}
+
+LogicalResult mlir::match::translateToCpp(Operation *op, raw_ostream &os) {
+  static const OpInfoRegistry emptyRegistry;
+  return translateToCpp(op, os, emptyRegistry);
 }
