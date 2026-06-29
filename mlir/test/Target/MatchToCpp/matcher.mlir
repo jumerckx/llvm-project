@@ -1,9 +1,11 @@
-// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
+// RUN: mlir-match-to-cpp %s --ods=%mlir_src_root/include/mlir/Dialect/Arith/IR/ArithOps.td \
+// RUN:   -I %mlir_src_root/include | FileCheck %s
 
-// A flat matcher on a *registered* op (arith.addf): because the concrete C++
-// class is known, the op-name test becomes a `dyn_cast`, the operand-count test
-// is elided (AddFOp always has two operands), operand navigation drops its
-// bounds check, and `is_not_null` collapses to an alias.
+// A flat matcher on an op whose ODS is supplied via `--ods` (arith.addf):
+// because the concrete C++ class is known, the op-name test becomes a
+// `dyn_cast`, the operand-count test is elided (AddFOp always has two
+// operands), operand navigation drops its bounds check, and `is_not_null`
+// collapses to an alias.
 
 module {
   // The rewriter symbols referenced by `success` only need to resolve; here we
@@ -21,8 +23,9 @@ module {
   }
 }
 
-// The generated matcher must pull in the op's header.
-// CHECK: #include "mlir/Dialect/Arith/IR/Arith.h"
+// The generated matcher references `::mlir::arith::AddFOp` but does not include
+// the dialect header itself; the includer provides it (DRR-style).
+// CHECK-NOT: #include "mlir/Dialect/Arith/IR/Arith.h"
 // CHECK: ::llvm::LogicalResult rewrite_addf(::mlir::PatternRewriter &rewriter, ::mlir::Operation *, ::mlir::Value);
 // CHECK: struct GeneratedMatcher_0 : public ::mlir::RewritePattern
 // CHECK: matchAndRewrite(::mlir::Operation *op,

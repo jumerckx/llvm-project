@@ -1,4 +1,4 @@
-// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
+// RUN: mlir-match-to-cpp %s | FileCheck %s
 
 // Checks that common builtin attributes/types are emitted as direct
 // construction calls instead of round-tripping through the parser.

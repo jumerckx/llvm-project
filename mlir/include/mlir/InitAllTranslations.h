@@ -21,7 +21,6 @@ namespace mlir {
 void registerFromLLVMIRTranslation();
 void registerFromSPIRVTranslation();
 void registerFromWasmTranslation();
-void registerMatchToCppTranslation();
 void registerToCppTranslation();
 void registerToLLVMIRTranslation();
 void registerToSPIRVTranslation();
@@ -39,7 +38,6 @@ inline void registerAllTranslations() {
     registerFromSPIRVTranslation();
     registerIRDLToCppTranslation();
     registerFromWasmTranslation();
-    registerMatchToCppTranslation();
     registerToCppTranslation();
     registerToLLVMIRTranslation();
     registerToSPIRVTranslation();

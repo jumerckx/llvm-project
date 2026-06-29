@@ -1,12 +1,17 @@
 # Translate the matcher descriptions to C++ at build time, mirroring how a real
-# user would invoke `mlir-translate --match-to-cpp` on their `match` IR.
+# user would invoke `mlir-match-to-cpp` on their `match` IR. `--ods` points the
+# tool at the Arith ODS definitions so `arith.addf` is matched via its concrete
+# C++ class (exercising the DRR-style dyn_cast / check-elision path end to end);
+# the dialect header is included by TestMatchToCpp.cpp, not the generated file.
 set(MATCH_TO_CPP_INPUT ${CMAKE_CURRENT_SOURCE_DIR}/TestMatchToCppPatterns.mlir)
 set(MATCH_TO_CPP_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/TestMatchToCppPatterns.h.inc)
 add_custom_command(
   OUTPUT ${MATCH_TO_CPP_OUTPUT}
-  COMMAND $<TARGET_FILE:mlir-translate> --match-to-cpp ${MATCH_TO_CPP_INPUT}
+  COMMAND $<TARGET_FILE:mlir-match-to-cpp> ${MATCH_TO_CPP_INPUT}
+          --ods=${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Arith/IR/ArithOps.td
+          -I ${MLIR_MAIN_INCLUDE_DIR} -I ${MLIR_INCLUDE_DIR}
           -o ${MATCH_TO_CPP_OUTPUT}
-  DEPENDS mlir-translate ${MATCH_TO_CPP_INPUT}
+  DEPENDS mlir-match-to-cpp ${MATCH_TO_CPP_INPUT}
   COMMENT "Generating C++ matchers from TestMatchToCppPatterns.mlir"
   )
 add_custom_target(MLIRTestMatchToCppPatternsIncGen DEPENDS ${MATCH_TO_CPP_OUTPUT})

@@ -143,6 +143,7 @@ set(MLIR_TEST_DEPENDS ${MLIR_TEST_DEPENDS}
   mlir-capi-pdl-test
   mlir-pdll-lsp-server
   mlir-pdll
+  mlir-match-to-cpp
   )
 
 # The native target may not be enabled, in this case we won't
