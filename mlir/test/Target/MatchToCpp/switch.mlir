@@ -1,4 +1,4 @@
-// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
+// RUN: mlir-match-to-cpp %s | FileCheck %s
 
 // `switch_op_name` -> an if/else-if chain on the runtime op name.
 

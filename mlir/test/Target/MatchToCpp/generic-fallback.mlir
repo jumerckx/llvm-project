@@ -1,4 +1,4 @@
-// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
+// RUN: mlir-match-to-cpp %s | FileCheck %s
 
 // An op whose name is not in the op-info registry falls back to the generic
 // `Operation *` emission: a string name test, a runtime operand-count check,

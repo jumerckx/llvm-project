@@ -1,4 +1,4 @@
-// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
+// RUN: mlir-match-to-cpp %s | FileCheck %s
 
 // Upward traversal: get_users + get_each -> an existential for-loop whose body
 // fails with `continue` and whose first matching element rewrites & returns.

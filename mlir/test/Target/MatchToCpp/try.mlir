@@ -1,4 +1,4 @@
-// RUN: mlir-translate --match-to-cpp %s | FileCheck %s
+// RUN: mlir-match-to-cpp %s | FileCheck %s
 
 // Two sibling `try` alternatives -> first-success-wins lambdas. The pattern's
 // static benefit is the max over the success ops (2).
