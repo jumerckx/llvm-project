@@ -1,4 +1,4 @@
-# RFC: The `match` dialect — an inspectable layer between PDL and PDL_Interp
+# RFC: The `match` dialect — a new IR between `pdl` and `pdl_interp`
 
 ## Summary
 
@@ -12,8 +12,12 @@ The lowering `pdl → pdl_interp` is split into three composable passes:
 pdl  --convert-pdl-to-match-->  match  --match-combine-matchers-->  match  --convert-match-to-pdl-interp-->  pdl_interp
 ```
 
-A `match`-to-C++ translation (`mlir-translate --match-to-cpp`) is also provided
-as an alternative backend that emits `RewritePattern`s directly.
+A `match`-to-C++ tool (`mlir-match-to-cpp`) is also implemented as an
+alternative backend that emits `RewritePattern`s directly.
+
+There is a [WASM web demo](https://jumerckx.github.io/mlir-opt-wasm/pdl.html) illustrating the pdl lowering flow with the `match`
+dialect.
+The branch with current implementation lives [here](https://github.com/jumerckx/llvm-project/tree/jm/pdl_constr_cpp).
 
 ## Motivation
 
@@ -24,7 +28,7 @@ lists are merged with a cost model (`PredicateTree.cpp`), and the merged
 `MatcherNode` tree is finally emitted as `pdl_interp` control flow. All of this
 is in-memory C++ that is never expressed as IR.
 
-That has practical costs:
+Downsides of this are:
 
 - **Not inspectable.** There is no textual form for "the matcher after root
   ordering" or "the combined predicate tree". Debugging an unexpected match
@@ -38,24 +42,33 @@ That has practical costs:
 
 `match` exists to expose this intermediate state. The cost-based combine that
 was previously private to `PDLToPDLInterp` becomes a standalone pass operating
-on `match` IR, and emission becomes a mechanical, separately-testable walk.
+on `match` IR, and `pdl_interp` emission becomes a separate, mechanical walk.
+
+Concretely, the match dialect is a nicer format to generate C++ from because, in
+contrast to `pdl`, the operations are imperative. And in contrast to `pdl_interp`,
+the IR does not contain unstructured control flow.
+
+The match dialect would also be used by other projects such as
+[Tamagoyaki](https://github.com/jumerckx/Tamagoyaki) to otherwise
+transform patterns.
+There is also interest to write rewrite pattern frontends (e.g. in xDSL), that
+generate `match` IR directly instead of forcing `pdl`'s declarative format onto
+frontends.
 
 ## Design
 
 - **Position encodes AND.** Ops in a matcher body run top to bottom. Reaching
-  any op means every test above it has already succeeded; there is no boolean to
-  thread.
-- **Regions encode the failure spine (OR).** Test ops are *not* `Pure`: each one
+  any op means every test above it has already succeeded.
+- **Regions scope matching failure (OR).** Test ops are *not* `Pure`: each one
   carries an implicit control effect — *on failure, transfer to the enclosing
   failure scope*. `match.try` opens a new failure scope, so a run of sibling
   `match.try` regions is exactly an OR of alternatives. This is the direct IR
   analogue of `MatcherNode::failureNode`.
-- **`match.success`** marks a leaf: every test on the path from the root to it
-  has held. It carries the `benefit`, the rewriter symbol, and the forwarded
-  match values — its signature deliberately mirrors `pdl_interp.record_match` so
-  the metadata passes through the final lowering unchanged. One `match.matcher`
-  may hold several `success` ops at different leaves, i.e. several patterns
-  sharing a common test prefix.
+- **`match.success`** marks a succesful pattern match: every test on the path
+  from the root to it has held. It carries the `benefit`, the rewriter symbol,
+  and the forwarded match values — its signature deliberately mirrors
+  `pdl_interp.record_match` so the metadata passes through the final lowering
+  unchanged. One `match.matcher` may hold several `success` ops.
 
 ### Nullability
 
@@ -72,12 +85,14 @@ Navigation ops are `Pure`; test ops are not. That distinction drives the
 combine pass: pure navigation can be freely re-placed (deduplicated, sunk),
 tests cannot.
 
-The reason to have unwrapping of optional values explicitly is because native constraints could be allowed to consume an optionally-null value.
+The reason to have unwrapping of optional values explicitly is because native
+constraints could be allowed to consume an optionally-null value.
 
 ### Types
 
-The `match` dialect reuses `!pdl.operation`, `!pdl.value`, `!pdl.type`, `!pdl.attribute` and `!pdl.range<...>`.
-ranges. The only new type is `!match.optional<T>` above.
+The `match` dialect reuses `!pdl.operation`, `!pdl.value`, `!pdl.type`,
+`!pdl.attribute` and `!pdl.range<...>`. The only new type is
+`!match.optional<T>` above.
 
 ### Multi-way dispatch and ranges
 
@@ -111,15 +126,13 @@ ranges. The only new type is `!match.optional<T>` above.
 Lowers each `pdl.pattern` into its own `match.matcher`, with no `try`/`switch`
 nesting beyond what the single pattern needs. Root selection and multi-root
 ordering reuse the existing `PDLToPDLInterp` helpers (`detectRoots`,
-`buildCostGraph`, `OptimalBranching`, ...) verbatim — only the emission backend
-differs, producing an ordered linear op sequence instead of `pdl_interp`
-control flow.
+`buildCostGraph`, `OptimalBranching`, ...).
 
 ### `match-combine-matchers`
 
 Merges all per-pattern matchers in a module into one combined matcher tree. This
-is the same cost-based merge `PredicateTree.cpp` performed in C++, re-expressed
-on IR. The key design payoff: **the IR already is the data structure.**
+is roughly the same cost-based merge `PredicateTree.cpp` performed in C++,
+re-expressed on IR.
 
 | `PredicateTree` concept | `match` representation |
 |---|---|
@@ -148,11 +161,14 @@ to emit) and `failureBlock` (where failures branch). Tests become
 correspondingly. Because the tree shape is already in the IR, there is no
 remaining cost model or tree-building here.
 
-### `mlir-translate --match-to-cpp`
+### `mlir-match-to-cpp`
 
 An alternative backend that emits a `RewritePattern` subclass per matcher
 directly from `match` IR, demonstrating that the explicit matcher IR is reusable
 for targets other than the `pdl_interp` interpreter.
+In contrast to DRR, this can generate matcher code for unregistered dialects
+as well. It can optionally take ODS definitions, similar to DRR, to generate
+matchers that use higher level C++ dialect APIs (see demo).
 
 ## Example
 
@@ -181,13 +197,3 @@ match.matcher @combined root(%root : !pdl.operation) {
   }
 }
 ```
-
-## Future work
-
-- Additional combine strategies (the cost model is now a pass, not a hardcoded
-  one), and pattern-set transforms that operate directly on `match` IR.
-- Literal accessor ops (attribute/type literals) to cover the few `Position`
-  kinds not yet represented.
-- Richer iteration semantics for `get_each` (e.g. universal in addition to
-  existential).
-- Surfacing `match` as a stable inspection/debugging point in the PDL pipeline.
