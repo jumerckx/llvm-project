@@ -34,6 +34,7 @@
 
 #include "mlir/Dialect/Match/IR/Match.h"
 #include "mlir/Dialect/Match/IR/MatchOps.h"
+#include "mlir/Dialect/Match/Transforms/MatchTransformsUtils.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "llvm/ADT/DenseMap.h"
@@ -152,8 +153,6 @@ private:
                 IRMapping &mapping);
 
   void foldSwitches(Region &region);
-
-  void sinkNavigationOps(Region &region);
 
   ModuleOp module;
 
@@ -289,31 +288,6 @@ LogicalResult Combiner::buildCanonicalPool() {
 //===----------------------------------------------------------------------===//
 
 namespace {
-
-/// SSA-native dependency: `a` must precede `b` iff `b` consumes any result
-/// of `a`. No separate operand-ID / result-ID bookkeeping needed.
-static bool dependsOn(Operation *a, Operation *b) {
-  for (Value operand : b->getOperands())
-    if (operand.getDefiningOp() == a)
-      return true;
-  return false;
-}
-
-template <typename Iterator, typename Compare>
-static void stableTopologicalSort(Iterator begin, Iterator end, Compare cmp) {
-  while (begin != end) {
-    llvm::SmallPtrSet<typename Iterator::value_type, 16> sortBeforeOthers;
-    for (auto i = begin; i != end; ++i) {
-      if (std::none_of(begin, end, [&](auto const &b) { return cmp(b, *i); }))
-        sortBeforeOthers.insert(*i);
-    }
-    auto const next = std::stable_partition(begin, end, [&](auto const &a) {
-      return sortBeforeOthers.contains(a);
-    });
-    assert(next != begin && "not a partial ordering");
-    begin = next;
-  }
-}
 
 void Combiner::sortCanonicalPool() {
   sortedPoolOps.reserve(poolDedup.size());
@@ -577,171 +551,6 @@ void Combiner::foldSwitches(Region &region) {
 }
 
 //===----------------------------------------------------------------------===//
-// Navigation sinking
-//
-// The cost-based predicate ordering puts every navigation op (`get_operand`,
-// `get_result`, ...) at the top of the matcher, ahead of the tests that
-// consume them. Navigation ops are pure value-producers with no failure /
-// control-flow effect, so they can be sunk down to just before their first
-// use. This makes the placement explicit in `match` and lets the
-// `match -> pdl_interp` lowering be a straightforward program-order
-// translation that still matches the original `pdl -> pdl_interp` output
-// (where `get_*` ops are emitted just-in-time into the block that consumes
-// them).
-//
-// A navigation op may be sunk into a `try` / `switch_*` case region only when
-// *all* of its uses live inside that single region (otherwise it must stay in
-// the enclosing region, which dominates every use). `get_each` is excluded:
-// it carries control flow (it lowers to a `foreach` loop).
-//===----------------------------------------------------------------------===//
-
-namespace {
-
-/// Pure navigation ops: side-effect-free value producers that can be freely
-/// re-placed as long as they still dominate their uses.
-static bool isPureNavigationOp(Operation *op) {
-  return isa<GetOperandOp, GetOperandsOp, GetResultOp, GetResultsOp,
-             GetAttributeOp, GetDefiningOpOp, GetValueTypeOp,
-             GetAttributeTypeOp, GetUsersOp, ExtractOp>(op);
-}
-
-/// Walk up from `u` until reaching the operation that sits directly in
-/// `block`. `block` must be an ancestor block of `u` (guaranteed here because
-/// the navigation op in `block` dominates `u`).
-static Operation *ancestorInBlock(Operation *u, Block *block) {
-  Operation *cur = u;
-  while (cur->getBlock() != block) {
-    cur = cur->getBlock()->getParentOp();
-    assert(cur && "expected block to be an ancestor of the use");
-  }
-  return cur;
-}
-
-/// Given that `anchor` is an ancestor op of `u`, return the region of `anchor`
-/// that (transitively) contains `u`.
-static Region *childRegionContaining(Operation *anchor, Operation *u) {
-  Operation *cur = u;
-  while (cur->getParentOp() != anchor)
-    cur = cur->getParentOp();
-  return cur->getParentRegion();
-}
-
-/// Compute the deepest valid placement for navigation op `n`: the block that
-/// dominates all uses of its result, and the op within that block that the
-/// navigation should be inserted right before. Returns {nullptr, nullptr} if
-/// `n` has no uses (dead). Descends into a `try` / `switch_*` case region only
-/// when every use is contained in that one region.
-static std::pair<Block *, Operation *> computeSinkTarget(Operation *n) {
-  Value v = n->getResult(0);
-  if (v.use_empty())
-    return {nullptr, nullptr};
-
-  SmallVector<Operation *, 4> users(v.getUsers());
-  Block *block = n->getBlock();
-  while (true) {
-    // Anchor each use to the op that sits directly in `block`, and find the
-    // earliest such anchor.
-    Operation *earliest = nullptr;
-    Operation *commonAnchor = nullptr;
-    bool allSameAnchor = true;
-    for (Operation *u : users) {
-      Operation *anchor = ancestorInBlock(u, block);
-      if (!earliest || anchor->isBeforeInBlock(earliest))
-        earliest = anchor;
-      if (!commonAnchor)
-        commonAnchor = anchor;
-      else if (commonAnchor != anchor)
-        allSameAnchor = false;
-    }
-
-    // Try to descend into a region of the common anchor: only possible when
-    // all uses funnel through a single region-carrying op that is not itself
-    // a direct user of the value.
-    if (allSameAnchor && commonAnchor->getNumRegions() > 0 &&
-        !llvm::is_contained(users, commonAnchor)) {
-      Region *target = nullptr;
-      bool single = true;
-      for (Operation *u : users) {
-        Region *r = childRegionContaining(commonAnchor, u);
-        if (!target)
-          target = r;
-        else if (target != r) {
-          single = false;
-          break;
-        }
-      }
-      if (single && target && target->hasOneBlock()) {
-        block = &target->front();
-        continue;
-      }
-    }
-
-    return {block, earliest};
-  }
-}
-
-} // namespace
-
-void Combiner::sinkNavigationOps(Region &region) {
-  // Collect all pure navigation ops in the matcher (across nested regions).
-  SmallVector<Operation *> navOps;
-  region.walk([&](Operation *op) {
-    if (isPureNavigationOp(op))
-      navOps.push_back(op);
-  });
-
-  // Drop dead navigation ops first (unused values are never emitted by the
-  // original lowering). Iterate to a fixpoint since erasing one may strand
-  // another that only fed it.
-  bool erased = true;
-  while (erased) {
-    erased = false;
-    for (Operation *&op : navOps) {
-      if (op && op->use_empty()) {
-        op->erase();
-        op = nullptr;
-        erased = true;
-      }
-    }
-  }
-  llvm::erase(navOps, nullptr);
-
-  // Sink each navigation op toward its first use. Iterate to a fixpoint:
-  // sinking a consumer can let its producer sink further. Moves are monotone
-  // (always later / deeper), so this converges.
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    for (Operation *op : navOps) {
-      auto [block, before] = computeSinkTarget(op);
-      if (!before)
-        continue;
-      // The op is already sunk far enough when it is in the target block and
-      // only other navigation ops lie between it and its first use: the real
-      // (control-flow-bearing) tests are all above it, and the relative order
-      // among sibling navigation ops that share a use is irrelevant. Checking
-      // for an exact "immediately before" position instead would make two
-      // navigation ops that feed the same use leapfrog each other forever.
-      if (op->getBlock() == block) {
-        bool needMove = false;
-        for (Operation *cur = op->getNextNode(); cur != before;
-             cur = cur->getNextNode()) {
-          assert(cur && "first use must come after the navigation op");
-          if (!isPureNavigationOp(cur)) {
-            needMove = true;
-            break;
-          }
-        }
-        if (!needMove)
-          continue;
-      }
-      op->moveBefore(before);
-      changed = true;
-    }
-  }
-}
-
-//===----------------------------------------------------------------------===//
 // Top-level emission
 //===----------------------------------------------------------------------===//
 
@@ -773,7 +582,7 @@ void Combiner::emitCombinedMatcher() {
 
   // Sink navigation ops to just before their first use so the lowering to
   // pdl_interp is a straightforward program-order translation.
-  sinkNavigationOps(combined.getBodyRegion());
+  match::sinkNavigationOps(combined.getBodyRegion());
 
   for (MatcherInfo &info : matcherInfos)
     info.matcher.erase();
