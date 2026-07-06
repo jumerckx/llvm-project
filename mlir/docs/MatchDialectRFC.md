@@ -117,6 +117,7 @@ The `match` dialect reuses `!pdl.operation`, `!pdl.value`, `!pdl.type`,
 | `match.extract` / `get_each` | range element access / existential iteration | `extract` may be null |
 | `match.is_not_null` | unwrap `optional<T>` | yes |
 | `match.has_name` / `has_type(s)` / `has_attr_value` / `equal` / `check_operand_count` / `check_result_count` / `apply_native_constraint` | tests | yes |
+| `match.apply_native_rewrite` | native value producer during matching | no |
 | `match.success` | matched-pattern leaf | — |
 
 ## The passes

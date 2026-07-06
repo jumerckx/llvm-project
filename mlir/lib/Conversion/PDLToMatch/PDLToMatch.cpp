@@ -524,6 +524,33 @@ void MatchEmitter::emitNonTreePredicates() {
             (void)getOrRegister(result, constrResult);
           }
         })
+        .Case([&](pdl::ApplyNativeRewriteOp rewriteOp) {
+          // A native rewrite used during matching is a value producer (it
+          // cannot fail). `pdl.apply_native_rewrite` is normally confined to
+          // `pdl.rewrite` regions, but `match.apply_native_rewrite` is not, so
+          // lower it here for completeness when it does appear in the matcher.
+          // As with constraints, skip if any argument is not yet mapped.
+          SmallVector<Value> args;
+          args.reserve(rewriteOp.getArgs().size());
+          for (Value arg : rewriteOp.getArgs()) {
+            Value mapped = valueMap.lookup(arg);
+            if (!mapped)
+              return;
+            args.push_back(mapped);
+          }
+
+          SmallVector<Type> resultTypes(rewriteOp.getResultTypes().begin(),
+                                        rewriteOp.getResultTypes().end());
+
+          auto nativeRewrite = match::ApplyNativeRewriteOp::create(
+              builder, loc, resultTypes, rewriteOp.getNameAttr(), args);
+
+          // Register rewrite results.
+          for (auto [i, result] : llvm::enumerate(rewriteOp.getResults())) {
+            Value rewriteResult = nativeRewrite.getResults()[i];
+            (void)getOrRegister(result, rewriteResult);
+          }
+        })
         .Case([&](pdl::ResultOp resultOp) {
           if (valueMap.count(resultOp))
             return;

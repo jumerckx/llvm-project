@@ -39,6 +39,10 @@
 //     in the same region emit inside the loop body, and their failure
 //     branches go to a `pdl_interp.continue` (next iteration). When the
 //     loop exhausts, control transfers to the original `failureBlock`.
+//   * `match.apply_native_rewrite` lowers to `pdl_interp.apply_rewrite`. It
+//     is a value producer with no failure edge, so emission stays in the
+//     current block (in contrast to `apply_native_constraint`, which is a
+//     test).
 //   * `match.success` lowers to `pdl_interp.record_match` whose
 //     successor is the current `failureBlock`.
 //
@@ -179,6 +183,9 @@ private:
   LogicalResult lowerCheckOperandCount(CheckOperandCountOp op);
   LogicalResult lowerCheckResultCount(CheckResultCountOp op);
   LogicalResult lowerApplyNativeConstraint(ApplyNativeConstraintOp op);
+
+  // Native rewrite (value producer, cannot fail)
+  LogicalResult lowerApplyNativeRewrite(ApplyNativeRewriteOp op);
 
   // Success
   LogicalResult lowerSuccess(SuccessOp op);
@@ -336,6 +343,8 @@ LogicalResult Lowerer::lowerOp(Operation *op) {
           [&](auto o) { return lowerCheckResultCount(o); })
       .Case<ApplyNativeConstraintOp>(
           [&](auto o) { return lowerApplyNativeConstraint(o); })
+      .Case<ApplyNativeRewriteOp>(
+          [&](auto o) { return lowerApplyNativeRewrite(o); })
       .Case<SuccessOp>([&](auto o) { return lowerSuccess(o); })
       .Default([&](Operation *o) {
         return o->emitOpError("unsupported match op in lowering");
@@ -706,6 +715,35 @@ LogicalResult Lowerer::lowerApplyNativeConstraint(ApplyNativeConstraintOp op) {
   }
 
   currentBlock = successBB;
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Native rewrite
+//===----------------------------------------------------------------------===//
+
+LogicalResult Lowerer::lowerApplyNativeRewrite(ApplyNativeRewriteOp op) {
+  // Unlike a native constraint, a native rewrite cannot fail: it is a plain
+  // value producer that lowers to `pdl_interp.apply_rewrite` (no success /
+  // failure successors). Emission stays in the current block.
+  builder.setInsertionPointToEnd(currentBlock);
+
+  SmallVector<Value, 4> args;
+  args.reserve(op.getArgs().size());
+  for (Value v : op.getArgs())
+    args.push_back(lookup(v));
+
+  SmallVector<Type, 2> resultTypes(op.getResults().getTypes());
+
+  auto applied = pdl_interp::ApplyRewriteOp::create(
+      builder, op.getLoc(), resultTypes, op.getNameAttr(), args);
+
+  // Map the produced results.
+  for (auto [orig, mapped] : llvm::zip(op.getResults(), applied.getResults())) {
+    map(orig, mapped);
+    recordLocOp(mapped);
+  }
+
   return success();
 }
 
