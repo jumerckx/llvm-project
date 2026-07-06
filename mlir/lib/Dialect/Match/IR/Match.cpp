@@ -369,6 +369,16 @@ LogicalResult ApplyNativeConstraintOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// ApplyNativeRewriteOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ApplyNativeRewriteOp::verify() {
+  if (getNumOperands() == 0 && getNumResults() == 0)
+    return emitOpError("expected at least one argument or result");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // SuccessOp
 //===----------------------------------------------------------------------===//
 

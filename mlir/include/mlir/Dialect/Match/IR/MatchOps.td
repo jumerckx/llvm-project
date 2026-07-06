@@ -474,6 +474,37 @@ def Match_ApplyNativeConstraintOp : Match_Op<"apply_native_constraint"> {
   }];
   let hasVerifier = 1;
 }
+
+//===----------------------------------------------------------------------===//
+// match::ApplyNativeRewriteOp
+//===----------------------------------------------------------------------===//
+
+def Match_ApplyNativeRewriteOp : Match_Op<"apply_native_rewrite"> {
+  let summary = "Apply a native rewrite method";
+  let description = [{
+    `match.apply_native_rewrite` operations apply a native C++ function, that
+    has been registered externally with the consumer of PDL, to perform a
+    rewrite and optionally return a number of values. The native function may
+    accept any number of arguments.
+
+    In contrast to `pdl.apply_native_rewrite`, this operation is not
+    constrained to appear within a `pdl.rewrite` region, allowing native
+    rewrite methods to be interleaved with match-dialect constructs.
+
+    Example:
+
+    ```mlir
+    // Apply a native rewrite method that returns an attribute.
+    %ret = match.apply_native_rewrite "myNativeFunc"(%arg0, %attr1) : !pdl.attribute
+    ```
+  }];
+
+  let arguments = (ins StrAttr:$name, Variadic<PDL_AnyType>:$args);
+  let results = (outs Variadic<PDL_AnyType>:$results);
+  let assemblyFormat = [{
+    $name (`(` $args^ `:` type($args) `)`)? (`:` type($results)^)? attr-dict
+  }];
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
