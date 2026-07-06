@@ -472,6 +472,8 @@ def Match_ApplyNativeConstraintOp : Match_Op<"apply_native_constraint"> {
   let assemblyFormat = [{
     $name `(` $args `:` type($args) `)` (`:` type($constraintResults)^)? attr-dict
   }];
+  let hasVerifier = 1;
+}
 }
 
 //===----------------------------------------------------------------------===//

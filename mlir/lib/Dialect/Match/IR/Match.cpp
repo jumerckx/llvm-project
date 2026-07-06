@@ -353,6 +353,22 @@ LogicalResult IsNotNullOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// ApplyNativeConstraintOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ApplyNativeConstraintOp::verify() {
+  if (getNumOperands() == 0)
+    return emitOpError("expected at least one argument");
+  if (llvm::any_of(getConstraintResults(), [](OpResult result) {
+        return isa<pdl::OperationType>(result.getType());
+      })) {
+    return emitOpError(
+        "returning an operation from a constraint is not supported");
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // SuccessOp
 //===----------------------------------------------------------------------===//
 
