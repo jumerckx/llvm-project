@@ -31,10 +31,14 @@
 //     in the parent region are lowered into that block (which is also where
 //     fall-off-end of the body branches).
 //   * `match.switch_*` lowers to `pdl_interp.switch_*` with the case
-//     regions lowered into separate blocks and the default set to the
-//     enclosing `failureBlock`. The switch is treated as a terminator: ops
-//     in the parent region after the switch are unreachable and are not
-//     emitted.
+//     regions lowered into separate blocks. `switch_*` is `NoTerminator`:
+//     it is a folded run of sibling `match.try` alternatives, so on no-match
+//     (the default) and on a matched-case-body failure, control falls through
+//     to the ops following the switch in the parent region -- the switch's
+//     default and its case failure scopes both point at a fall-through block
+//     where those siblings are lowered. Only when the switch is the last op in
+//     its region does the fall-through target become the enclosing
+//     `failureBlock` directly.
 //   * `match.get_each` lowers to `pdl_interp.foreach`; subsequent ops
 //     in the same region emit inside the loop body, and their failure
 //     branches go to a `pdl_interp.continue` (next iteration). When the
@@ -383,10 +387,17 @@ LogicalResult Lowerer::lowerTry(TryOp op) {
 LogicalResult Lowerer::lowerSwitchOpName(SwitchOpNameOp op) {
   Value mappedOp = lookup(op.getOp());
 
-  // Lower each case region into its own block. Each case body inherits the
-  // current failure scope.
   Block *outerCurrent = currentBlock;
   Block *outerFailure = failureBlock;
+
+  // `switch_op_name` is `NoTerminator`: it does not commit the match by itself.
+  // If no case matches (the implicit default) or a matched case body fails,
+  // control falls through to the ops following the switch in this region --
+  // the switch is a folded run of sibling `match.try` alternatives, so its
+  // failure must reach the next alternative, not the enclosing failure scope.
+  // When the switch is the last op in the region there is no next sibling, so
+  // the fall-through target is the enclosing failure scope directly.
+  Block *fallthrough = op->getNextNode() ? newBlock() : outerFailure;
 
   // Create all case blocks up front, while `currentBlock` is still the (valid)
   // outer block. Deferring creation into the loop below would assert once a
@@ -400,7 +411,7 @@ LogicalResult Lowerer::lowerSwitchOpName(SwitchOpNameOp op) {
        llvm::zip(op.getCaseRegions(), op.getCaseNames(), caseBlocks)) {
     size_t savedLocSize = locOps.size();
     currentBlock = caseBlock;
-    failureBlock = outerFailure;
+    failureBlock = fallthrough;
     // Within this case region the switched op is known to have `caseName`.
     StringAttr savedName = opNameMap.lookup(mappedOp);
     opNameMap[mappedOp] = llvm::cast<StringAttr>(caseName);
@@ -414,7 +425,8 @@ LogicalResult Lowerer::lowerSwitchOpName(SwitchOpNameOp op) {
       locOps.pop_back();
   }
 
-  // Emit the switch terminator in the outer current block.
+  // Emit the switch in the outer current block, with the default branch to the
+  // fall-through block.
   currentBlock = outerCurrent;
   failureBlock = outerFailure;
   builder.setInsertionPointToEnd(currentBlock);
@@ -426,10 +438,11 @@ LogicalResult Lowerer::lowerSwitchOpName(SwitchOpNameOp op) {
         OperationName(llvm::cast<StringAttr>(a).getValue(), op.getContext()));
 
   pdl_interp::SwitchOperationNameOp::create(
-      builder, op.getLoc(), mappedOp, names, outerFailure, caseBlocks);
+      builder, op.getLoc(), mappedOp, names, fallthrough, caseBlocks);
 
-  // Switch is a terminator; no ops after it should be lowered in the parent.
-  currentBlock = nullptr;
+  // Continue lowering the following siblings into the fall-through block; if
+  // there were none, this scope is terminated.
+  currentBlock = op->getNextNode() ? fallthrough : nullptr;
   return success();
 }
 
@@ -438,6 +451,12 @@ LogicalResult Lowerer::lowerSwitchType(SwitchTypeOp op) {
 
   Block *outerCurrent = currentBlock;
   Block *outerFailure = failureBlock;
+
+  // Like `switch_op_name`, `switch_type` is `NoTerminator`: no-match and
+  // matched-case-body failures fall through to the ops following the switch
+  // (the next sibling alternative), or to the enclosing failure scope when the
+  // switch is the last op in the region.
+  Block *fallthrough = op->getNextNode() ? newBlock() : outerFailure;
 
   // Create all case blocks up front, while `currentBlock` is still the (valid)
   // outer block. Deferring creation into the loop below would assert once a
@@ -451,7 +470,7 @@ LogicalResult Lowerer::lowerSwitchType(SwitchTypeOp op) {
        llvm::zip(op.getCaseRegions(), caseBlocks)) {
     size_t savedLocSize = locOps.size();
     currentBlock = caseBlock;
-    failureBlock = outerFailure;
+    failureBlock = fallthrough;
     if (failed(lowerRegion(caseRegion)))
       return failure();
     while (locOps.size() > savedLocSize)
@@ -466,9 +485,9 @@ LogicalResult Lowerer::lowerSwitchType(SwitchTypeOp op) {
                                           op.getCaseTypes().end());
 
   pdl_interp::SwitchTypeOp::create(builder, op.getLoc(), mappedTy,
-                                   caseTypeAttrs, outerFailure, caseBlocks);
+                                   caseTypeAttrs, fallthrough, caseBlocks);
 
-  currentBlock = nullptr;
+  currentBlock = op->getNextNode() ? fallthrough : nullptr;
   return success();
 }
 
