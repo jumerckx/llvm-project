@@ -43,8 +43,11 @@
 //     is a value producer with no failure edge, so emission stays in the
 //     current block (in contrast to `apply_native_constraint`, which is a
 //     test).
-//   * `match.success` lowers to `pdl_interp.record_match` whose
-//     successor is the current `failureBlock`.
+//   * `match.success` lowers to `pdl_interp.record_match`. Because matching
+//     continues after a recorded match, its successor is a fresh continuation
+//     block into which subsequent siblings are lowered (chaining multiple
+//     `match.success` ops into distinct `record_match` ops); a trailing
+//     continuation falls off the end to the current `failureBlock`.
 //
 //===----------------------------------------------------------------------===//
 
@@ -771,14 +774,18 @@ LogicalResult Lowerer::lowerSuccess(SuccessOp op) {
 
   SmallVector<Value, 4> matchedOps(locOps.begin(), locOps.end());
 
+  // `record_match` is a terminator, but after recording a match we continue
+  // looking for more matches: its successor is where subsequent siblings in
+  // this region (e.g. another `match.success`) are lowered. Emit into a fresh
+  // continuation block so multiple successes chain into distinct
+  // `record_match` ops. When this success is the last op in the region, the
+  // continuation block simply falls off the end to `failureBlock`.
+  Block *continuation = newBlock();
   pdl_interp::RecordMatchOp::create(
       builder, op.getLoc(), inputs, matchedOps, op.getRewriterAttr(),
-      rootKindAttr, generatedOpsAttr, op.getBenefitAttr(), failureBlock);
+      rootKindAttr, generatedOpsAttr, op.getBenefitAttr(), continuation);
 
-  // record_match is a terminator; no ops after it should be emitted in
-  // this scope (subsequent siblings in the parent region are unreachable
-  // from this success op).
-  currentBlock = nullptr;
+  currentBlock = continuation;
   return success();
 }
 
