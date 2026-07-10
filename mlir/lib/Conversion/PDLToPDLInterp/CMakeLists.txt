@@ -2,6 +2,7 @@ add_mlir_conversion_library(MLIRPDLToPDLInterp
   PDLToPDLInterp.cpp
   Predicate.cpp
   PredicateTree.cpp
+  RewriterGen.cpp
   RootOrdering.cpp
 
   ADDITIONAL_HEADER_DIRS

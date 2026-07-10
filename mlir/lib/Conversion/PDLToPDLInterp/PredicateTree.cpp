@@ -7,16 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "PredicateTree.h"
-#include "RootOrdering.h"
+#include "mlir/Conversion/PDLToPDLInterp/RootOrdering.h"
 
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugLog.h"
-#include <queue>
 
 #define DEBUG_TYPE "pdl-predicate-tree"
 
@@ -35,12 +33,6 @@ static void getTreePredicates(std::vector<PositionalPredicate> &predList,
 /// Compares the depths of two positions.
 static bool comparePosDepth(Position *lhs, Position *rhs) {
   return lhs->getOperationDepth() < rhs->getOperationDepth();
-}
-
-/// Returns the number of non-range elements within `values`.
-static unsigned getNumNonRangeValues(ValueRange values) {
-  return llvm::count_if(values.getTypes(),
-                        [](Type type) { return !isa<pdl::RangeType>(type); });
 }
 
 static void getTreePredicates(std::vector<PositionalPredicate> &predList,
@@ -367,174 +359,6 @@ static void getNonTreePredicates(pdl::PatternOp pattern,
               inputs);
         });
   }
-}
-
-namespace {
-
-/// An op accepting a value at an optional index.
-struct OpIndex {
-  Value parent;
-  std::optional<unsigned> index;
-};
-
-/// The parent and operand index of each operation for each root, stored
-/// as a nested map [root][operation].
-using ParentMaps = DenseMap<Value, DenseMap<Value, OpIndex>>;
-
-} // namespace
-
-/// Given a pattern, determines the set of roots present in this pattern.
-/// These are the operations whose results are not consumed by other operations.
-static SmallVector<Value> detectRoots(pdl::PatternOp pattern) {
-  // First, collect all the operations that are used as operands
-  // to other operations. These are not roots by default.
-  DenseSet<Value> used;
-  for (auto operationOp : pattern.getBodyRegion().getOps<pdl::OperationOp>()) {
-    for (Value operand : operationOp.getOperandValues())
-      TypeSwitch<Operation *>(operand.getDefiningOp())
-          .Case<pdl::ResultOp, pdl::ResultsOp>(
-              [&used](auto resultOp) { used.insert(resultOp.getParent()); });
-  }
-
-  // Remove the specified root from the use set, so that we can
-  // always select it as a root, even if it is used by other operations.
-  if (Value root = pattern.getRewriter().getRoot())
-    used.erase(root);
-
-  // Finally, collect all the unused operations.
-  SmallVector<Value> roots;
-  for (Value operationOp : pattern.getBodyRegion().getOps<pdl::OperationOp>())
-    if (!used.contains(operationOp))
-      roots.push_back(operationOp);
-
-  return roots;
-}
-
-/// Given a list of candidate roots, builds the cost graph for connecting them.
-/// The graph is formed by traversing the DAG of operations starting from each
-/// root and marking the depth of each connector value (operand). Then we join
-/// the candidate roots based on the common connector values, taking the one
-/// with the minimum depth. Along the way, we compute, for each candidate root,
-/// a mapping from each operation (in the DAG underneath this root) to its
-/// parent operation and the corresponding operand index.
-static void buildCostGraph(ArrayRef<Value> roots, RootOrderingGraph &graph,
-                           ParentMaps &parentMaps) {
-
-  // The entry of a queue. The entry consists of the following items:
-  // * the value in the DAG underneath the root;
-  // * the parent of the value;
-  // * the operand index of the value in its parent;
-  // * the depth of the visited value.
-  struct Entry {
-    Entry(Value value, Value parent, std::optional<unsigned> index,
-          unsigned depth)
-        : value(value), parent(parent), index(index), depth(depth) {}
-
-    Value value;
-    Value parent;
-    std::optional<unsigned> index;
-    unsigned depth;
-  };
-
-  // A root of a value and its depth (distance from root to the value).
-  struct RootDepth {
-    Value root;
-    unsigned depth = 0;
-  };
-
-  // Map from candidate connector values to their roots and depths. Using a
-  // small vector with 1 entry because most values belong to a single root.
-  llvm::MapVector<Value, SmallVector<RootDepth, 1>> connectorsRootsDepths;
-
-  // Perform a breadth-first traversal of the op DAG rooted at each root.
-  for (Value root : roots) {
-    // The queue of visited values. A value may be present multiple times in
-    // the queue, for multiple parents. We only accept the first occurrence,
-    // which is guaranteed to have the lowest depth.
-    std::queue<Entry> toVisit;
-    toVisit.emplace(root, Value(), 0, 0);
-
-    // The map from value to its parent for the current root.
-    DenseMap<Value, OpIndex> &parentMap = parentMaps[root];
-
-    while (!toVisit.empty()) {
-      Entry entry = toVisit.front();
-      toVisit.pop();
-      // Skip if already visited.
-      if (!parentMap.insert({entry.value, {entry.parent, entry.index}}).second)
-        continue;
-
-      // Mark the root and depth of the value.
-      connectorsRootsDepths[entry.value].push_back({root, entry.depth});
-
-      // Traverse the operands of an operation and result ops.
-      // We intentionally do not traverse attributes and types, because those
-      // are expensive to join on.
-      TypeSwitch<Operation *>(entry.value.getDefiningOp())
-          .Case([&](pdl::OperationOp operationOp) {
-            OperandRange operands = operationOp.getOperandValues();
-            // Special case when we pass all the operands in one range.
-            // For those, the index is empty.
-            if (operands.size() == 1 &&
-                isa<pdl::RangeType>(operands[0].getType())) {
-              toVisit.emplace(operands[0], entry.value, std::nullopt,
-                              entry.depth + 1);
-              return;
-            }
-
-            // Default case: visit all the operands.
-            for (const auto &p :
-                 llvm::enumerate(operationOp.getOperandValues()))
-              toVisit.emplace(p.value(), entry.value, p.index(),
-                              entry.depth + 1);
-          })
-          .Case<pdl::ResultOp, pdl::ResultsOp>([&](auto resultOp) {
-            toVisit.emplace(resultOp.getParent(), entry.value,
-                            resultOp.getIndex(), entry.depth);
-          });
-    }
-  }
-
-  // Now build the cost graph.
-  // This is simply a minimum over all depths for the target root.
-  unsigned nextID = 0;
-  for (const auto &connectorRootsDepths : connectorsRootsDepths) {
-    Value value = connectorRootsDepths.first;
-    ArrayRef<RootDepth> rootsDepths = connectorRootsDepths.second;
-    // If there is only one root for this value, this will not trigger
-    // any edges in the cost graph (a perf optimization).
-    if (rootsDepths.size() == 1)
-      continue;
-
-    for (const RootDepth &p : rootsDepths) {
-      for (const RootDepth &q : rootsDepths) {
-        if (&p == &q)
-          continue;
-        // Insert or retrieve the property of edge from p to q.
-        RootOrderingEntry &entry = graph[q.root][p.root];
-        if (!entry.connector /* new edge */ || entry.cost.first > q.depth) {
-          if (!entry.connector)
-            entry.cost.second = nextID++;
-          entry.cost.first = q.depth;
-          entry.connector = value;
-        }
-      }
-    }
-  }
-
-  assert((llvm::hasSingleElement(roots) || graph.size() == roots.size()) &&
-         "the pattern contains a candidate root disconnected from the others");
-}
-
-/// Returns true if the operand at the given index needs to be queried using an
-/// operand group, i.e., if it is variadic itself or follows a variadic operand.
-static bool useOperandGroup(pdl::OperationOp op, unsigned index) {
-  OperandRange operands = op.getOperandValues();
-  assert(index < operands.size() && "operand index out of range");
-  for (unsigned i = 0; i <= index; ++i)
-    if (isa<pdl::RangeType>(operands[i].getType()))
-      return true;
-  return false;
 }
 
 /// Visit a node during upward traversal.
@@ -1005,9 +829,27 @@ MatcherNode::generateMatcherTree(ModuleOp module, PredicateBuilder &builder,
     return *lhs < *rhs;
   });
 
+  LDBG() << "Sorted predicates (after cost sort):";
+  for (auto *p : ordered) {
+    LDBG() << "  * primary=" << p->primary << " secondary=" << p->secondary
+           << " depth=" << p->position->getOperationDepth()
+           << " posKind=" << (unsigned)p->position->getKind()
+           << " questKind=" << (unsigned)p->question->getKind()
+           << " id=" << p->id;
+  }
+
   // Mostly keep the now established order, but also ensure that
   // ConstraintQuestions come after the results they use.
   stableTopologicalSort(ordered.begin(), ordered.end(), dependsOn);
+
+  LDBG() << "Sorted predicates (after topological sort):";
+  for (auto *p : ordered) {
+    LDBG() << "  * primary=" << p->primary << " secondary=" << p->secondary
+           << " depth=" << p->position->getOperationDepth()
+           << " posKind=" << (unsigned)p->position->getKind()
+           << " questKind=" << (unsigned)p->question->getKind()
+           << " id=" << p->id;
+  }
 
   // Build the matchers for each of the pattern predicate lists.
   std::unique_ptr<MatcherNode> root;
