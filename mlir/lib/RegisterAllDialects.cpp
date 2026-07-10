@@ -65,6 +65,7 @@
 #include "mlir/Dialect/OpenACC/OpenACC.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
+#include "mlir/Dialect/Match/IR/Match.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/Dialect/Ptr/IR/PtrDialect.h"
 #include "mlir/Dialect/Quant/IR/Quant.h"
@@ -139,6 +140,7 @@ void mlir::registerAllDialects(DialectRegistry &registry) {
                   NVVM::NVVMDialect,
                   omp::OpenMPDialect,
                   pdl::PDLDialect,
+                  match::MatchDialect,
                   pdl_interp::PDLInterpDialect,
                   ptr::PtrDialect,
                   quant::QuantDialect,
