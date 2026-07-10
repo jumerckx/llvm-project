@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "../lib/Conversion/PDLToPDLInterp/RootOrdering.h"
+#include "mlir/Conversion/PDLToPDLInterp/RootOrdering.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
