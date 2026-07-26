@@ -350,16 +350,35 @@ LogicalResult MatcherCppEmitter::emitTry(TryOp op) {
 
 LogicalResult MatcherCppEmitter::emitSwitchOpName(SwitchOpNameOp op,
                                                   StringRef failAction) {
-  std::string nameVar = freshId("name");
+  ArrayAttr cases = op.getCaseNames();
+  // Resolve each case name against the op-info registry up front. A case whose
+  // op class is known dispatches with a typed `isa` instead of a name compare.
+  SmallVector<const OpInfo *> caseInfos;
+  bool anyGeneric = false;
+  for (Attribute c : cases) {
+    const OpInfo *info = registry.lookup(cast<StringAttr>(c).getValue());
+    caseInfos.push_back(info);
+    anyGeneric |= !info;
+  }
+
   indent() << "{\n";
   ++indentLevel;
-  indent() << "::llvm::StringRef " << nameVar << " = " << getName(op.getOp())
-           << "->getName().getStringRef();\n";
-  ArrayAttr cases = op.getCaseNames();
+  // The runtime op-name string is only needed by generic (non-`isa`) cases.
+  std::string nameVar;
+  if (anyGeneric) {
+    nameVar = freshId("name");
+    indent() << "::llvm::StringRef " << nameVar << " = " << getName(op.getOp())
+             << "->getName().getStringRef();\n";
+  }
   for (auto [j, region] : llvm::enumerate(op.getCaseRegions())) {
     auto caseName = cast<StringAttr>(cases[j]).getValue();
-    indent() << (j == 0 ? "if" : "else if") << " (" << nameVar << " == \""
-             << caseName << "\") {\n";
+    indent() << (j == 0 ? "if" : "else if") << " (";
+    if (const OpInfo *info = caseInfos[j])
+      os << "::llvm::isa<" << info->cppClassName << ">(" << getName(op.getOp())
+         << ")";
+    else
+      os << nameVar << " == \"" << caseName << "\"";
+    os << ") {\n";
     ++indentLevel;
     // Inside a matched case the op name is known, so bind a concrete handle
     // (an unchecked `cast`) for the duration of this case region. Snapshot any
@@ -372,7 +391,7 @@ LogicalResult MatcherCppEmitter::emitSwitchOpName(SwitchOpNameOp op,
       hadPrev = true;
       saved = prev->second;
     }
-    if (const OpInfo *info = registry.lookup(caseName)) {
+    if (const OpInfo *info = caseInfos[j]) {
       bindConcrete(op.getOp(), *info, /*alreadyKnownName=*/true, failAction);
       bound = true;
     }
