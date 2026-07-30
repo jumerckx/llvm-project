@@ -3,7 +3,11 @@
 # tool at the Arith ODS definitions so `arith.addf` is matched via its concrete
 # C++ class (exercising the DRR-style dyn_cast / check-elision path end to end);
 # the dialect header is included by TestMatchToCpp.cpp, not the generated file.
-set(MATCH_TO_CPP_INPUT ${CMAKE_CURRENT_SOURCE_DIR}/TestMatchToCppPatterns.mlir)
+#
+# The input lives under Inputs/ because lit excludes that directory: it is a
+# build-time input, not a standalone test, so it has no RUN line.
+set(MATCH_TO_CPP_INPUT
+  ${CMAKE_CURRENT_SOURCE_DIR}/Inputs/TestMatchToCppPatterns.mlir)
 set(MATCH_TO_CPP_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/TestMatchToCppPatterns.h.inc)
 add_custom_command(
   OUTPUT ${MATCH_TO_CPP_OUTPUT}

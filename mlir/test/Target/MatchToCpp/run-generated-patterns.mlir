@@ -1,10 +1,10 @@
 // RUN: mlir-opt %s --test-match-to-cpp --allow-unregistered-dialect | FileCheck %s
 
 // End-to-end check of the match-to-cpp flow: the matchers in
-// test/lib/Target/MatchToCpp/TestMatchToCppPatterns.mlir are translated to C++
-// at build time and applied here by `--test-match-to-cpp`. This validates the
-// generated patterns actually *match and rewrite*, not just that the emitted
-// text looks right (covered by the sibling mlir-translate tests).
+// test/lib/Target/MatchToCpp/Inputs/TestMatchToCppPatterns.mlir are translated
+// to C++ at build time and applied here by `--test-match-to-cpp`. This
+// validates the generated patterns actually *match and rewrite*, not just that
+// the emitted text looks right (covered by the sibling mlir-translate tests).
 
 // The `rename` matcher fires on `test.original` and rebuilds it as
 // `test.renamed`, forwarding operands and result types.

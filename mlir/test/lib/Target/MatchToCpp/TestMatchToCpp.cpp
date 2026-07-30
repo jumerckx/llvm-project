@@ -7,9 +7,10 @@
 //===----------------------------------------------------------------------===//
 //
 // This pass exercises the *whole* `match-to-cpp` flow rather than just the
-// emitted text: TestMatchToCppPatterns.mlir is translated to C++ at build time
-// by `mlir-translate --match-to-cpp`, the result is `#include`d below, and the
-// generated `populateGeneratedPatterns` patterns are applied to the payload IR.
+// emitted text: Inputs/TestMatchToCppPatterns.mlir is translated to C++ at
+// build time by `mlir-translate --match-to-cpp`, the result is `#include`d
+// below, and the generated `populateGeneratedPatterns` patterns are applied to
+// the payload IR.
 // The hand-written `rewrite_*` hooks stand in for the user-supplied rewrite
 // side that the emitter forward-declares.
 //
