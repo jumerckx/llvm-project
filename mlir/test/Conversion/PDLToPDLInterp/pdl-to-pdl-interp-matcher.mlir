@@ -1,5 +1,11 @@
 // RUN: mlir-opt -split-input-file -convert-pdl-to-pdl-interp %s | FileCheck %s
 
+// NOTE: the pattern corpus below is shared:
+// test/Conversion/PDLToMatch/pdl-to-match.mlir runs `-convert-pdl-to-match`
+// over this same file and supplies its own CHECK lines, anchored on each
+// split's `module @name`. Adding, removing or reordering a split here means
+// updating that file too.
+
 // CHECK-LABEL: module @empty_module
 module @empty_module {
 // CHECK: func @matcher(%{{.*}}: !pdl.operation)
