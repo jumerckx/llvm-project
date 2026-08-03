@@ -202,6 +202,7 @@ tools = [
     "mlir-linalg-ods-yaml-gen",
     "mlir-reduce",
     "mlir-pdll",
+    "mlir-match-to-cpp",
     "not",
 ]
 
