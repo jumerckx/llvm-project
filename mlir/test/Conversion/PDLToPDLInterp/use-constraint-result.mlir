@@ -1,5 +1,10 @@
 // RUN: mlir-opt -split-input-file -convert-pdl-to-pdl-interp %s | FileCheck %s
 
+// NOTE: the pattern corpus below is shared:
+// test/Conversion/PDLToMatch/pdl-to-match-constraint-result.mlir runs
+// `-convert-pdl-to-match` over this same file and supplies its own CHECK
+// lines, in split order.
+
 // Ensuse that the dependency between add & less
 // causes them to be in the correct order.
 // CHECK-LABEL: matcher
