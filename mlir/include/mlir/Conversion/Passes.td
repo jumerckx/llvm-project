@@ -1135,6 +1135,19 @@ def ConvertPDLToPDLInterpPass : Pass<"convert-pdl-to-pdl-interp", "ModuleOp"> {
   let dependentDialects = ["pdl_interp::PDLInterpDialect"];
 }
 
+def ConvertMatchToPDLInterpPass
+    : Pass<"convert-match-to-pdl-interp", "ModuleOp"> {
+  let summary = "Combine match patterns and lower them to pdl_interp";
+  let description = [{
+    Combines all `match.pattern` ops in a module into a single shared
+    matcher tree and emits the corresponding `pdl_interp` matcher function.
+    The rewriter functions referenced from `match.success` are assumed
+    to already exist in the nested rewriter module (typically produced by
+    `convert-pdl-to-match`).
+  }];
+  let dependentDialects = ["pdl_interp::PDLInterpDialect"];
+}
+
 //===----------------------------------------------------------------------===//
 // ReconcileUnrealizedCasts
 //===----------------------------------------------------------------------===//
