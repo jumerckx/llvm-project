@@ -1,4 +1,5 @@
 add_subdirectory(mlir-lsp-server)
+add_subdirectory(mlir-match-to-cpp)
 add_subdirectory(mlir-opt)
 add_subdirectory(mlir-parser-fuzzer)
 add_subdirectory(mlir-pdll-lsp-server)

@@ -58,6 +58,7 @@ if(MLIR_INCLUDE_TESTS)
     set(test_libs ${test_libs}
       MLIRTestPDLL
       MLIRTestRewrite
+      MLIRTestMatchToCpp
       )
   endif()
 endif()
