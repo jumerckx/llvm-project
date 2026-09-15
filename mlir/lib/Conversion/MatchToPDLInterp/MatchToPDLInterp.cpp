@@ -232,7 +232,37 @@ private:
   /// (and by `switch_op_name` case regions). Used to recover the optional
   /// `rootKind` of `pdl_interp.record_match`, mirroring the original
   /// `pdl -> pdl_interp` lowering.
+  ///
+  /// Like `locOps` this is path-local, so every nested failure scope saves and
+  /// restores it via `PathScope`: a name checked inside a scope says nothing
+  /// about the path taken when that scope fails.
   llvm::DenseMap<Value, StringAttr> opNameMap;
+
+  /// Saves and restores the two facts above, which hold only on the path
+  /// *through* a nested failure scope.
+  ///
+  /// The ops emitted after a `try`, a `foreach` or a `switch_*` case are
+  /// reached precisely when that scope failed, so nothing the scope
+  /// established may be observed there. For `locOps` that means dropping what
+  /// the scope pushed; for `opNameMap` it means restoring the whole map, since
+  /// one scope may record names for any number of values.
+  class PathScope {
+  public:
+    explicit PathScope(Lowerer &lowerer)
+        : lowerer(lowerer), savedLocSize(lowerer.locOps.size()),
+          savedOpNames(lowerer.opNameMap) {}
+
+    ~PathScope() {
+      while (lowerer.locOps.size() > savedLocSize)
+        lowerer.locOps.pop_back();
+      lowerer.opNameMap = std::move(savedOpNames);
+    }
+
+  private:
+    Lowerer &lowerer;
+    size_t savedLocSize;
+    llvm::DenseMap<Value, StringAttr> savedOpNames;
+  };
 };
 
 } // namespace
@@ -381,14 +411,13 @@ LogicalResult Lowerer::lowerTry(TryOp op) {
   Block *savedFailure = failureBlock;
   failureBlock = afterTry;
 
-  // Track locOps stack so anything created inside the try is dropped after.
-  size_t savedLocSize = locOps.size();
-
-  if (failed(lowerRegion(op.getBody())))
-    return failure();
-
-  while (locOps.size() > savedLocSize)
-    locOps.pop_back();
+  // The after-try block is reached only when the body failed, so nothing the
+  // body established holds there.
+  {
+    PathScope scope(*this);
+    if (failed(lowerRegion(op.getBody())))
+      return failure();
+  }
 
   failureBlock = savedFailure;
   currentBlock = afterTry;
@@ -416,16 +445,19 @@ LogicalResult Lowerer::lowerForEach(ForEachOp op) {
   pdl_interp::ContinueOp::create(builder, op.getLoc());
 
   Block *savedFailure = failureBlock;
-  size_t savedLocSize = locOps.size();
 
-  currentBlock = &foreach.getRegion().front();
-  failureBlock = continueBlock;
-  recordLocOp(foreach.getLoopVariable());
-  if (failed(lowerRegion(op.getBody())))
-    return failure();
+  // The after-loop block is reached only once the range is exhausted, i.e.
+  // after every iteration failed, so nothing the body established holds there
+  // -- including the loop variable's `loc()` entry and any name it checked.
+  {
+    PathScope scope(*this);
+    currentBlock = &foreach.getRegion().front();
+    failureBlock = continueBlock;
+    recordLocOp(foreach.getLoopVariable());
+    if (failed(lowerRegion(op.getBody())))
+      return failure();
+  }
 
-  while (locOps.size() > savedLocSize)
-    locOps.pop_back();
   failureBlock = savedFailure;
 
   // Continue lowering the following siblings into the after-loop block; if
@@ -460,20 +492,16 @@ LogicalResult Lowerer::lowerSwitchOpName(SwitchOpNameOp op) {
 
   for (auto [caseRegion, caseName, caseBlock] :
        llvm::zip(op.getCaseRegions(), op.getCaseNames(), caseBlocks)) {
-    size_t savedLocSize = locOps.size();
+    // A case region is a failure scope like a `try` body: the fall-through is
+    // reached when no case matched or a case body failed, so neither the
+    // case's own name nor anything the body established holds there.
+    PathScope scope(*this);
     currentBlock = caseBlock;
     failureBlock = fallthrough;
     // Within this case region the switched op is known to have `caseName`.
-    StringAttr savedName = opNameMap.lookup(mappedOp);
     opNameMap[mappedOp] = llvm::cast<StringAttr>(caseName);
     if (failed(lowerRegion(caseRegion)))
       return failure();
-    if (savedName)
-      opNameMap[mappedOp] = savedName;
-    else
-      opNameMap.erase(mappedOp);
-    while (locOps.size() > savedLocSize)
-      locOps.pop_back();
   }
 
   // Emit the switch in the outer current block, with the default branch to the
@@ -519,13 +547,11 @@ LogicalResult Lowerer::lowerSwitchType(SwitchTypeOp op) {
 
   for (auto [caseRegion, caseBlock] :
        llvm::zip(op.getCaseRegions(), caseBlocks)) {
-    size_t savedLocSize = locOps.size();
+    PathScope scope(*this);
     currentBlock = caseBlock;
     failureBlock = fallthrough;
     if (failed(lowerRegion(caseRegion)))
       return failure();
-    while (locOps.size() > savedLocSize)
-      locOps.pop_back();
   }
 
   currentBlock = outerCurrent;

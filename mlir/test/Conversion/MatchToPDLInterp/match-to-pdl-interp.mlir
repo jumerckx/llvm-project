@@ -100,17 +100,12 @@ module {
 // match.try: failures inside the body branch to the after-try block, and ops
 // following the try are lowered *into* that block.
 //
-// FIXME: the `root("foo.op")` on the second record_match is wrong. `has_name` is
-// inside the try, so on the path reaching ^bb5 the name was never checked — the
-// try may have failed precisely because the name did not match. Recording that
-// pattern under root("foo.op") keys it to `foo.op` in the bytecode, so it is
-// never attempted on any other operation and the pattern matches strictly
-// *less* than written.
-//
-// The switch lowering gets this right (see @sw_mid below, whose trailing
-// record_match correctly has no `root(...)`), so the fix is to save and restore
-// `opNameMap` around a try body the same way `locOps` already is. The CHECK line
-// below pins today's behaviour so the change is visible when it lands.
+// The `root(...)` hint is path-local: the first record_match is inside the try,
+// where `has_name` has been checked, so it gets `root("foo.op")`. The second is
+// in the after-try block, reached precisely when the try *failed* -- possibly
+// because the name did not match -- so it must have no `root(...)`. Recording
+// it under `root("foo.op")` would key the pattern to `foo.op` in the bytecode
+// and it would never be attempted on any other operation.
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: pdl_interp.func @matcher(%arg0: !pdl.operation) {
@@ -126,7 +121,7 @@ module {
 // CHECK-NEXT:  ^bb4:
 // CHECK-NEXT:    pdl_interp.branch ^bb2
 // CHECK-NEXT:  ^bb5:
-// CHECK-NEXT:    pdl_interp.record_match @rewriters::@r : benefit(2), loc([%arg0]), root("foo.op") -> ^bb6
+// CHECK-NEXT:    pdl_interp.record_match @rewriters::@r : benefit(2), loc([%arg0]) -> ^bb6
 module {
   module @rewriters { module @r {} }
   match.matcher @with_try root(%root : !pdl.operation) {
@@ -145,9 +140,10 @@ module {
 // to the inner after-try (^bb3), whose own failures go to the outer after-try
 // (^bb2), and only that falls through to finalize.
 //
-// This split also shows the scope of the FIXME above: `root("inner.op")` reaches
-// *all three* record_matches, including benefit(3), which is two try levels out
-// from the `has_name` that produced the name.
+// It also shows the `root(...)` scoping at two levels: only benefit(1), emitted
+// inside both trys, carries `root("inner.op")`. benefit(2) is one level out and
+// benefit(3) two, and each is reached by a path on which the name check may
+// have been what failed, so neither gets a root.
 // CHECK-LABEL: pdl_interp.func @matcher(%arg0: !pdl.operation) {
 // CHECK-NEXT:    pdl_interp.check_operation_name of %arg0 is "inner.op" -> ^bb4, ^bb3
 // CHECK-NEXT:  ^bb1:
@@ -156,7 +152,10 @@ module {
 // CHECK-NEXT:    pdl_interp.check_result_count of %arg0 is 3 -> ^bb8, ^bb1
 // CHECK-NEXT:  ^bb3:
 // CHECK-NEXT:    pdl_interp.check_operand_count of %arg0 is 1 -> ^bb6, ^bb2
-// CHECK:         pdl_interp.record_match @rewriters::@r : benefit(3), loc([%arg0]), root("inner.op")
+// Innermost success keeps the root; the two outer ones must not have it.
+// CHECK:         pdl_interp.record_match @rewriters::@r : benefit(1), loc([%arg0]), root("inner.op")
+// CHECK:         pdl_interp.record_match @rewriters::@r : benefit(2), loc([%arg0]) ->
+// CHECK:         pdl_interp.record_match @rewriters::@r : benefit(3), loc([%arg0]) ->
 module {
   module @rewriters { module @r {} }
   match.matcher @nested_try root(%root : !pdl.operation) {
@@ -243,6 +242,28 @@ module {
     match.switch_type %t
     case i32 { match.success @rewriters::@r benefit(1) }
     case i64 { match.success @rewriters::@r benefit(2) }
+  }
+}
+
+// -----
+
+// A `switch_type` case body is a failure scope too, so a `has_name` inside one
+// does not reach the fall-through: only benefit(1) is keyed to `foo.op`.
+// CHECK-LABEL: pdl_interp.func @matcher(%arg0: !pdl.operation) {
+// CHECK-DAG:     pdl_interp.record_match @rewriters::@r : benefit(1), loc([%arg0]), root("foo.op")
+// CHECK-DAG:     pdl_interp.record_match @rewriters::@r0 : benefit(2), loc([%arg0]) ->
+module {
+  module @rewriters { module @r {} module @r0 {} }
+  match.matcher @sw_type_name_scope root(%root : !pdl.operation) {
+    %r = match.get_result 0 of %root : !match.optional<!pdl.value>
+    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.value
+    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    match.switch_type %t
+    case i32 {
+      match.has_name %root, "foo.op"
+      match.success @rewriters::@r benefit(1)
+    }
+    match.success @rewriters::@r0 benefit(2)
   }
 }
 
@@ -335,6 +356,31 @@ module {
     }
     match.has_name %root, "fallback.op"
     match.success @rewriters::@r0 benefit(1)
+  }
+}
+
+// -----
+
+// A name checked *inside* the loop body holds only for that iteration: the
+// after-loop block is reached once every element has failed. So benefit(1),
+// recorded in the body, is keyed to `foo.op`, while benefit(2), recorded after
+// the loop, must not be. The loop variable is likewise dropped from `loc()`.
+// CHECK-LABEL: pdl_interp.func @matcher(%arg0: !pdl.operation) {
+// CHECK-DAG:     pdl_interp.record_match @rewriters::@r : benefit(1), loc([%arg0, %{{.*}}]), root("foo.op")
+// CHECK-DAG:     pdl_interp.record_match @rewriters::@r0 : benefit(2), loc([%arg0]) ->
+module {
+  module @rewriters { module @r {} module @r0 {} }
+  match.matcher @foreach_name_scope root(%root : !pdl.operation) {
+    %os = match.get_operands of %root : !match.optional<!pdl.range<value>>
+    %vs = match.is_not_null %os : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    match.foreach %e in %vs : !pdl.range<value> {
+      %users = match.get_users of %e : !pdl.range<operation>
+      match.foreach %u in %users : !pdl.range<operation> {
+        match.has_name %root, "foo.op"
+        match.success @rewriters::@r benefit(1)
+      }
+    }
+    match.success @rewriters::@r0 benefit(2)
   }
 }
 
