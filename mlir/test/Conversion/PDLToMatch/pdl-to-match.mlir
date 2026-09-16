@@ -44,10 +44,10 @@
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: module @attributes
-// CHECK:         %[[A:.*]] = get_attribute "attr" of %{{.*}} : <!pdl.attribute>
-// CHECK-NEXT:    %[[AV:.*]] = is_not_null %[[A]] : <!pdl.attribute> -> !pdl.attribute
+// CHECK:         %[[A:.*]] = get_attribute "attr" of %{{.*}} : !match.optional<!pdl.attribute>
+// CHECK-NEXT:    %[[AV:.*]] = is_not_null %[[A]] : !match.optional<!pdl.attribute> -> !pdl.attribute
 // CHECK-NEXT:    has_attr_value %[[AV]] is 10 : i64
-// CHECK:         %[[A1:.*]] = get_attribute "attr1" of %{{.*}} : <!pdl.attribute>
+// CHECK:         %[[A1:.*]] = get_attribute "attr1" of %{{.*}} : !match.optional<!pdl.attribute>
 // CHECK-NEXT:    %[[AV1:.*]] = is_not_null %[[A1]]
 // CHECK-NEXT:    %[[AT:.*]] = get_attribute_type of %[[AV1]] : !pdl.type
 // CHECK-NEXT:    has_type %[[AT]], i64
@@ -88,9 +88,9 @@
 
 // CHECK-LABEL: module @inputs
 // CHECK:         check_operand_count %{{.*}} is 2
-// CHECK:         %[[O0:.*]] = get_operand 0 of %{{.*}} : <!pdl.value>
+// CHECK:         %[[O0:.*]] = get_operand 0 of %{{.*}} : !match.optional<!pdl.value>
 // CHECK-NEXT:    %[[V0:.*]] = is_not_null %[[O0]]
-// CHECK:         %[[O1:.*]] = get_operand 1 of %{{.*}} : <!pdl.value>
+// CHECK:         %[[O1:.*]] = get_operand 1 of %{{.*}} : !match.optional<!pdl.value>
 // CHECK-NEXT:    %[[V1:.*]] = is_not_null %[[O1]]
 // CHECK-NEXT:    equal %[[V1]], %[[V0]] : !pdl.value
 
@@ -98,16 +98,16 @@
 // `get_operands` at and after the variadic position.
 // CHECK-LABEL: module @variadic_inputs
 // CHECK:         check_operand_count %{{.*}} is at_least 2
-// CHECK:         %{{.*}} = get_operand 0 of %{{.*}} : <!pdl.value>
-// CHECK:         %[[OS:.*]] = get_operands 1 of %{{.*}} : <!pdl.range<value>>
-// CHECK-NEXT:    %[[VS:.*]] = is_not_null %[[OS]] : <!pdl.range<value>> -> !pdl.range<value>
+// CHECK:         %{{.*}} = get_operand 0 of %{{.*}} : !match.optional<!pdl.value>
+// CHECK:         %[[OS:.*]] = get_operands 1 of %{{.*}} : !match.optional<!pdl.range<value>>
+// CHECK-NEXT:    %[[VS:.*]] = is_not_null %[[OS]] : !match.optional<!pdl.range<value>> -> !pdl.range<value>
 // CHECK-NEXT:    %[[TS:.*]] = get_value_type of %[[VS]] : !pdl.range<value> : !pdl.range<type>
 // CHECK-NEXT:    has_types %[[TS]], [i64]
 
 // A single operand range needs no operand-count check at all.
 // CHECK-LABEL: module @single_operand_range
 // CHECK-NOT:     check_operand_count
-// CHECK:         %[[OS:.*]] = get_operands of %{{.*}} : <!pdl.range<value>>
+// CHECK:         %[[OS:.*]] = get_operands of %{{.*}} : !match.optional<!pdl.range<value>>
 // CHECK-NEXT:    %[[VS:.*]] = is_not_null %[[OS]]
 // CHECK-NEXT:    %[[TS:.*]] = get_value_type of %[[VS]]
 // CHECK-NEXT:    has_types %[[TS]], [i64]
@@ -118,14 +118,14 @@
 
 // CHECK-LABEL: module @results
 // CHECK:         check_result_count %{{.*}} is 2
-// CHECK:         %[[R0:.*]] = get_result 0 of %{{.*}} : <!pdl.value>
+// CHECK:         %[[R0:.*]] = get_result 0 of %{{.*}} : !match.optional<!pdl.value>
 // CHECK-NEXT:    %[[RV0:.*]] = is_not_null %[[R0]]
 // CHECK-NEXT:    %[[T0:.*]] = get_value_type of %[[RV0]]
 // CHECK-NEXT:    has_type %[[T0]], i32
 
 // CHECK-LABEL: module @variadic_results
 // CHECK:         check_result_count %{{.*}} is at_least 2
-// CHECK:         %[[RS:.*]] = get_results 1 of %{{.*}} : <!pdl.range<value>>
+// CHECK:         %[[RS:.*]] = get_results 1 of %{{.*}} : !match.optional<!pdl.range<value>>
 // CHECK-NEXT:    %[[RVS:.*]] = is_not_null %[[RS]]
 // CHECK-NEXT:    %[[TS:.*]] = get_value_type of %[[RVS]]
 // CHECK-NEXT:    has_types %[[TS]], [i64]
@@ -134,7 +134,7 @@
 
 // CHECK-LABEL: module @single_result_range
 // CHECK-NOT:     check_result_count
-// CHECK:         %[[RS:.*]] = get_results of %{{.*}} : <!pdl.range<value>>
+// CHECK:         %[[RS:.*]] = get_results of %{{.*}} : !match.optional<!pdl.range<value>>
 
 //===----------------------------------------------------------------------===//
 // A result used as an operand: navigate to the defining op, then tie the
@@ -142,11 +142,11 @@
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: module @results_as_operands
-// CHECK:         %[[O0:.*]] = get_operand 0 of %{{.*}} : <!pdl.value>
+// CHECK:         %[[O0:.*]] = get_operand 0 of %{{.*}} : !match.optional<!pdl.value>
 // CHECK-NEXT:    %[[V0:.*]] = is_not_null %[[O0]]
-// CHECK-NEXT:    %[[D:.*]] = get_defining_op of %[[V0]] : !pdl.value -> <!pdl.operation>
-// CHECK-NEXT:    %[[DOP:.*]] = is_not_null %[[D]] : <!pdl.operation> -> !pdl.operation
-// CHECK-NEXT:    %[[DR:.*]] = get_result 0 of %[[DOP]] : <!pdl.value>
+// CHECK-NEXT:    %[[D:.*]] = get_defining_op of %[[V0]] : !pdl.value -> !match.optional<!pdl.operation>
+// CHECK-NEXT:    %[[DOP:.*]] = is_not_null %[[D]] : !match.optional<!pdl.operation> -> !pdl.operation
+// CHECK-NEXT:    %[[DR:.*]] = get_result 0 of %[[DOP]] : !match.optional<!pdl.value>
 // CHECK-NEXT:    %[[DRV:.*]] = is_not_null %[[DR]]
 // CHECK-NEXT:    equal %[[DRV]], %[[V0]] : !pdl.value
 // The two operands share a defining op, which is pinned by a final `equal`.
@@ -154,11 +154,11 @@
 
 // The range form uses `get_operands` / `get_results` and a range-typed equal.
 // CHECK-LABEL: module @single_result_range_as_operands
-// CHECK:         %[[OS:.*]] = get_operands of %{{.*}} : <!pdl.range<value>>
+// CHECK:         %[[OS:.*]] = get_operands of %{{.*}} : !match.optional<!pdl.range<value>>
 // CHECK-NEXT:    %[[VS:.*]] = is_not_null %[[OS]]
-// CHECK-NEXT:    %[[D:.*]] = get_defining_op of %[[VS]] : !pdl.range<value> -> <!pdl.operation>
+// CHECK-NEXT:    %[[D:.*]] = get_defining_op of %[[VS]] : !pdl.range<value> -> !match.optional<!pdl.operation>
 // CHECK-NEXT:    %[[DOP:.*]] = is_not_null %[[D]]
-// CHECK-NEXT:    %[[DRS:.*]] = get_results of %[[DOP]] : <!pdl.range<value>>
+// CHECK-NEXT:    %[[DRS:.*]] = get_results of %[[DOP]] : !match.optional<!pdl.range<value>>
 // CHECK-NEXT:    %[[DRVS:.*]] = is_not_null %[[DRS]]
 // CHECK-NEXT:    equal %[[DRVS]], %[[VS]] : !pdl.range<value>
 
@@ -214,7 +214,7 @@
 // CHECK:       match.matcher @rewrite_multi_root root(%[[ROOT:.*]]: !pdl.operation) {
 // CHECK:         %[[USERS:.*]] = get_users of %[[V:.*]] : <operation>
 // CHECK-NEXT:    foreach %[[EACH:.*]] in %[[USERS]] : !pdl.range<operation> {
-// CHECK-NEXT:      %[[EO:.*]] = get_operand 0 of %[[EACH]] : <!pdl.value>
+// CHECK-NEXT:      %[[EO:.*]] = get_operand 0 of %[[EACH]] : !match.optional<!pdl.value>
 // CHECK-NEXT:      %[[EOV:.*]] = is_not_null %[[EO]]
 // CHECK-NEXT:      equal %[[EOV]], %[[V]] : !pdl.value
 // CHECK:           success @rewriters::@rewrite_multi_root benefit(1) (%[[ROOT]], %[[EACH]] : !pdl.operation, !pdl.operation)
