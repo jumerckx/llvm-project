@@ -90,8 +90,8 @@ module {
   module @rewriters { module @foo {} }
   match.matcher @switch_type_count root(%root : !pdl.operation) {
     %r = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.value
-    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    %v = match.is_not_null %r : !pdl.value
+    %t = match.get_value_type of %v : !pdl.type
     // expected-error @below {{expected one region per case type (2 types vs 1 regions)}}
     "match.switch_type"(%t) ({
       "match.success"() {rewriter = @rewriters::@foo, benefit = 1 : i16} : () -> ()
@@ -106,14 +106,16 @@ module {
 // Navigation verifiers
 //===----------------------------------------------------------------------===//
 
-// A scalar value cannot produce a range of types.
+// A scalar value cannot produce a range of types. The custom syntax derives
+// the operand type from the printed result type, so the mismatch is only
+// expressible in the generic form.
 module {
   module @rewriters { module @foo {} }
   match.matcher @value_type_range root(%root : !pdl.operation) {
     %r = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.value
-    // expected-error @below {{expected result to be a range iff the value is a range}}
-    %t = match.get_value_type of %v : !pdl.value : !pdl.range<type>
+    %v = match.is_not_null %r : !pdl.value
+    // expected-error @below {{failed to verify that `value` type matches arity of `result`}}
+    %t = "match.get_value_type"(%v) : (!pdl.value) -> !pdl.range<type>
     match.success @rewriters::@foo benefit(1)
   }
 }
@@ -140,10 +142,10 @@ module {
   module @rewriters { module @foo {} }
   match.matcher @foreach_dead root(%root : !pdl.operation) {
     %rs = match.get_results of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %rs : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %rs : !pdl.range<value>
     // expected-error @below {{`match.foreach` body contains no `match.success` (directly or transitively); the region is dead}}
     match.foreach %e in %vs : !pdl.range<value> {
-      %t = match.get_value_type of %e : !pdl.value : !pdl.type
+      %t = match.get_value_type of %e : !pdl.type
       match.has_type %t, i32
     }
     match.success @rewriters::@foo benefit(1)
@@ -152,12 +154,15 @@ module {
 
 // -----
 
+// The unwrapped type must be the optional's inner type. The custom syntax
+// derives the operand type from the printed unwrapped type, so the mismatch
+// is only expressible in the generic form.
 module {
   module @rewriters { module @foo {} }
   match.matcher @unwrap_type root(%root : !pdl.operation) {
     %r = match.get_result 0 of %root : !match.optional<!pdl.value>
-    // expected-error @below {{expected unwrapped result type '!pdl.type' to match inner type of optional '!pdl.value'}}
-    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.type
+    // expected-error @below {{failed to verify that `optionalValue` is the optional of `unwrapped`}}
+    %v = "match.is_not_null"(%r) : (!match.optional<!pdl.value>) -> !pdl.type
     match.success @rewriters::@foo benefit(1)
   }
 }
@@ -255,7 +260,7 @@ module {
   module @rewriters { module @foo {} }
   match.matcher @negative_index root(%root : !pdl.operation) {
     %rs = match.get_results of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %rs : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %rs : !pdl.range<value>
     // expected-error @below {{'index' failed to satisfy constraint: 32-bit signless integer attribute whose value is non-negative}}
     %e = match.extract -1 of %vs : !pdl.value
     match.success @rewriters::@foo benefit(1)

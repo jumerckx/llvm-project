@@ -6,10 +6,11 @@
 //  * ops inside a `match.matcher` / `match.try` / switch case body print
 //    *without* the `match.` prefix (those regions set a default dialect), so
 //    the CHECK lines below assert the elided form;
-//  * `!pdl.range<T>` prints abbreviated when it appears in a type position
-//    owned by the dialect (`: <operation>`), while the nullable navigation
-//    ops qualify their optional type and print it in full
-//    (`: !match.optional<!pdl.value>`).
+//  * the nullable navigation ops qualify their result type, so the optional
+//    prints in full (`: !match.optional<!pdl.value>`), while `is_not_null`
+//    and the non-nullable navigation ops print only the types that are not
+//    implied by the op itself (`is_not_null %o : !pdl.value`,
+//    `get_users of %v`).
 //
 // Piping through `mlir-opt` twice also catches a printer that is not a fixed
 // point.
@@ -124,9 +125,9 @@ module {
   // CHECK-LABEL: match.matcher @switch_types
   match.matcher @switch_types root(%root : !pdl.operation) {
     %r0 = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v0 = match.is_not_null %r0 : !match.optional<!pdl.value> -> !pdl.value
-    // CHECK: %[[T:.*]] = get_value_type of %{{.*}} : !pdl.value : !pdl.type
-    %t0 = match.get_value_type of %v0 : !pdl.value : !pdl.type
+    %v0 = match.is_not_null %r0 : !pdl.value
+    // CHECK: %[[T:.*]] = get_value_type of %{{.*}} : !pdl.type
+    %t0 = match.get_value_type of %v0 : !pdl.type
     // CHECK:      switch_type %[[T]]
     // CHECK-NEXT: case i32 {
     // CHECK-NEXT:   success @rewriters::@foo benefit(1)
@@ -206,12 +207,12 @@ module {
     %a = match.get_attribute "attr" of %root : !match.optional<!pdl.attribute>
 
     // `get_defining_op` on a value and on a value range.
-    // CHECK: %[[V0:.*]] = is_not_null %[[O0]] : !match.optional<!pdl.value> -> !pdl.value
-    %v0 = match.is_not_null %o0 : !match.optional<!pdl.value> -> !pdl.value
+    // CHECK: %[[V0:.*]] = is_not_null %[[O0]] : !pdl.value
+    %v0 = match.is_not_null %o0 : !pdl.value
     // CHECK: %{{.*}} = get_defining_op of %[[V0]] : !pdl.value -> !match.optional<!pdl.operation>
     %d = match.get_defining_op of %v0 : !pdl.value -> !match.optional<!pdl.operation>
-    // CHECK: %[[VS:.*]] = is_not_null %[[OS]] : !match.optional<!pdl.range<value>> -> !pdl.range<value>
-    %vs = match.is_not_null %os : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    // CHECK: %[[VS:.*]] = is_not_null %[[OS]] : !pdl.range<value>
+    %vs = match.is_not_null %os : !pdl.range<value>
     // CHECK: %{{.*}} = get_defining_op of %[[VS]] : !pdl.range<value> -> !match.optional<!pdl.operation>
     %dr = match.get_defining_op of %vs : !pdl.range<value> -> !match.optional<!pdl.operation>
     match.success @rewriters::@foo benefit(1)
@@ -225,25 +226,26 @@ module {
   match.matcher @nav_plain root(%root : !pdl.operation) {
     %o0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
     // CHECK: %[[V0:.*]] = is_not_null
-    %v0 = match.is_not_null %o0 : !match.optional<!pdl.value> -> !pdl.value
+    %v0 = match.is_not_null %o0 : !pdl.value
     %os = match.get_operands of %root : !match.optional<!pdl.range<value>>
     // CHECK: %[[VS:.*]] = is_not_null
-    %vs = match.is_not_null %os : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %os : !pdl.range<value>
 
     // `get_value_type` has a scalar and a range form.
-    // CHECK: %{{.*}} = get_value_type of %[[V0]] : !pdl.value : !pdl.type
-    %t0 = match.get_value_type of %v0 : !pdl.value : !pdl.type
-    // CHECK: %{{.*}} = get_value_type of %[[VS]] : !pdl.range<value> : !pdl.range<type>
-    %ts = match.get_value_type of %vs : !pdl.range<value> : !pdl.range<type>
+    // CHECK: %{{.*}} = get_value_type of %[[V0]] : !pdl.type
+    %t0 = match.get_value_type of %v0 : !pdl.type
+    // CHECK: %{{.*}} = get_value_type of %[[VS]] : !pdl.range<type>
+    %ts = match.get_value_type of %vs : !pdl.range<type>
 
     %a = match.get_attribute "attr" of %root : !match.optional<!pdl.attribute>
     // CHECK: %[[AV:.*]] = is_not_null
-    %av = match.is_not_null %a : !match.optional<!pdl.attribute> -> !pdl.attribute
-    // CHECK: %{{.*}} = get_attribute_type of %[[AV]] : !pdl.type
-    %at = match.get_attribute_type of %av : !pdl.type
-    // A range of operations prints abbreviated as `<operation>`.
-    // CHECK: %[[USERS:.*]] = get_users of %[[V0]] : <operation>
-    %users = match.get_users of %v0 : !pdl.range<operation>
+    %av = match.is_not_null %a : !pdl.attribute
+    // CHECK: %{{.*}} = get_attribute_type of %[[AV]]
+    %at = match.get_attribute_type of %av
+    // `get_attribute_type` and `get_users` have fully implied types, so they
+    // print none at all.
+    // CHECK: %[[USERS:.*]] = get_users of %[[V0]]
+    %users = match.get_users of %v0
 
     // `extract` yields the range's element type.
     // CHECK: %{{.*}} = extract 0 of %[[VS]] : !pdl.value
@@ -262,11 +264,11 @@ module {
   match.matcher @loops root(%root : !pdl.operation) {
     %os = match.get_operands of %root : !match.optional<!pdl.range<value>>
     // CHECK: %[[VS:.*]] = is_not_null
-    %vs = match.is_not_null %os : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %os : !pdl.range<value>
     // CHECK: foreach %[[E:.*]] in %[[VS]] : !pdl.range<value> {
     match.foreach %e in %vs : !pdl.range<value> {
-      // CHECK: %[[USERS:.*]] = get_users of %[[E]] : <operation>
-      %users = match.get_users of %e : !pdl.range<operation>
+      // CHECK: %[[USERS:.*]] = get_users of %[[E]]
+      %users = match.get_users of %e
       // CHECK: foreach %[[U:.*]] in %[[USERS]] : !pdl.range<operation> {
       match.foreach %u in %users : !pdl.range<operation> {
         // CHECK: has_name %[[U]], "foo.op"
@@ -296,27 +298,27 @@ module {
 
     %o0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
     // CHECK: %[[V0:.*]] = is_not_null
-    %v0 = match.is_not_null %o0 : !match.optional<!pdl.value> -> !pdl.value
+    %v0 = match.is_not_null %o0 : !pdl.value
     %o1 = match.get_operand 1 of %root : !match.optional<!pdl.value>
     // CHECK: %[[V1:.*]] = is_not_null
-    %v1 = match.is_not_null %o1 : !match.optional<!pdl.value> -> !pdl.value
+    %v1 = match.is_not_null %o1 : !pdl.value
     // CHECK: equal %[[V0]], %[[V1]] : !pdl.value
     match.equal %v0, %v1 : !pdl.value
 
     // CHECK: %[[T0:.*]] = get_value_type of %[[V0]]
-    %t0 = match.get_value_type of %v0 : !pdl.value : !pdl.type
+    %t0 = match.get_value_type of %v0 : !pdl.type
     // CHECK: has_type %[[T0]], i32
     match.has_type %t0, i32
     %os = match.get_operands of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %os : !match.optional<!pdl.range<value>> -> !pdl.range<value>
-    // CHECK: %[[TS:.*]] = get_value_type of %{{.*}} : !pdl.range<value> : !pdl.range<type>
-    %ts = match.get_value_type of %vs : !pdl.range<value> : !pdl.range<type>
+    %vs = match.is_not_null %os : !pdl.range<value>
+    // CHECK: %[[TS:.*]] = get_value_type of %{{.*}} : !pdl.range<type>
+    %ts = match.get_value_type of %vs : !pdl.range<type>
     // CHECK: has_types %[[TS]], [i32, i64]
     match.has_types %ts, [i32, i64]
 
     %a = match.get_attribute "attr" of %root : !match.optional<!pdl.attribute>
     // CHECK: %[[AV:.*]] = is_not_null
-    %av = match.is_not_null %a : !match.optional<!pdl.attribute> -> !pdl.attribute
+    %av = match.is_not_null %a : !pdl.attribute
     // CHECK: has_attr_value %[[AV]] is 10 : i64
     match.has_attr_value %av is 10 : i64
     match.success @rewriters::@foo benefit(1)
@@ -357,7 +359,7 @@ module {
   match.matcher @successes root(%root : !pdl.operation) {
     %o0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
     // CHECK: %[[V0:.*]] = is_not_null
-    %v0 = match.is_not_null %o0 : !match.optional<!pdl.value> -> !pdl.value
+    %v0 = match.is_not_null %o0 : !pdl.value
     // CHECK: success @rewriters::@foo benefit(3) (%arg0, %[[V0]] : !pdl.operation, !pdl.value)
     match.success @rewriters::@foo benefit(3) (%root, %v0 : !pdl.operation, !pdl.value)
   }

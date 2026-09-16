@@ -371,40 +371,66 @@ def Match_GetDefiningOpOp : Match_Op<"get_defining_op", [Pure]> {
 // Navigation Ops - Non-nullable (return bare PDL types)
 //===----------------------------------------------------------------------===//
 
-def Match_GetValueTypeOp : Match_Op<"get_value_type", [Pure]> {
+def Match_GetValueTypeOp : Match_Op<"get_value_type", [Pure,
+    TypesMatchWith<"`value` type matches arity of `result`",
+                   "result", "value", "getGetValueTypeOpValueType($_self)">]> {
   let summary = "Get the type of a value or value range (non-nullable)";
   let description = [{
     Gets the type of a value (or the types of a value range). Always succeeds
     because the input value has already been null-checked. If the input is a
     `!pdl.range<value>`, the result is a `!pdl.range<type>`.
+
+    Only the result type is printed: the operand is a `!pdl.value` when the
+    result is a `!pdl.type` and a `!pdl.range<value>` when the result is a
+    `!pdl.range<type>`.
+
+    Example:
+
+    ```mlir
+    %type = match.get_value_type of %value : !pdl.type
+    %types = match.get_value_type of %values : !pdl.range<type>
+    ```
   }];
   let arguments = (ins PDL_InstOrRangeOf<PDL_Value>:$value);
   let results = (outs PDL_InstOrRangeOf<PDL_Type>:$result);
-  let assemblyFormat =
-      "`of` $value `:` type($value) attr-dict `:` type($result)";
-  let hasVerifier = 1;
+  let assemblyFormat = "`of` $value `:` type($result) attr-dict";
 }
 
 def Match_GetAttributeTypeOp : Match_Op<"get_attribute_type", [Pure]> {
   let summary = "Get the type of an attribute (non-nullable)";
   let description = [{
     Gets the type of an attribute. Always succeeds because the input attribute
-    has already been null-checked.
+    has already been null-checked. The operand and result types are implied
+    (`!pdl.attribute` and `!pdl.type`) and therefore not printed.
+
+    Example:
+
+    ```mlir
+    %type = match.get_attribute_type of %attr
+    ```
   }];
   let arguments = (ins PDL_Attribute:$attribute);
   let results = (outs PDL_Type:$result);
-  let assemblyFormat = "`of` $attribute attr-dict `:` type($result)";
+  let assemblyFormat = "`of` $attribute attr-dict";
 }
 
 def Match_GetUsersOp : Match_Op<"get_users", [Pure]> {
   let summary = "Get all users of a value (non-nullable)";
   let description = [{
     Gets all operations that use a value. Always returns a range
-    (possibly empty), so it cannot fail.
+    (possibly empty), so it cannot fail. The operand and result types are
+    implied (`!pdl.value` and `!pdl.range<operation>`) and therefore not
+    printed.
+
+    Example:
+
+    ```mlir
+    %users = match.get_users of %value
+    ```
   }];
   let arguments = (ins PDL_Value:$value);
   let results = (outs PDL_RangeOf<PDL_Operation>:$result);
-  let assemblyFormat = "`of` $value attr-dict `:` type($result)";
+  let assemblyFormat = "`of` $value attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
@@ -473,7 +499,7 @@ def Match_ForEachOp : Match_Op<"foreach", [
     Example:
 
     ```mlir
-    %users = match.get_users of %v : !pdl.range<operation>
+    %users = match.get_users of %v
     match.foreach %u in %users : !pdl.range<operation> {
       match.has_name %u, "test.use"
       match.success @rewriters::@r benefit(1) (%u : !pdl.operation)
@@ -521,7 +547,10 @@ def Match_ForEachOp : Match_Op<"foreach", [
 // even when they produce no SSA results.
 //===----------------------------------------------------------------------===//
 
-def Match_IsNotNullOp : Match_Op<"is_not_null"> {
+def Match_IsNotNullOp : Match_Op<"is_not_null", [
+    TypesMatchWith<"`optionalValue` is the optional of `unwrapped`",
+                   "unwrapped", "optionalValue",
+                   "::mlir::match::OptionalType::get($_self)">]> {
   let summary = "Unwrap an optional value, failing if it is null";
   let description = [{
     Checks that an optional value is non-null and produces the bare inner
@@ -531,14 +560,20 @@ def Match_IsNotNullOp : Match_Op<"is_not_null"> {
 
     By SSA dominance, the unwrapped result can only be used by ops below this
     one, which mirrors the control-flow guarantee in the lowered form.
+
+    Only the unwrapped type is printed; the operand type is the corresponding
+    `!match.optional<...>`.
+
+    Example:
+
+    ```mlir
+    // %operand is a !match.optional<!pdl.value>.
+    %value = match.is_not_null %operand : !pdl.value
+    ```
   }];
   let arguments = (ins Match_OptionalType:$optionalValue);
   let results = (outs PDL_AnyType:$unwrapped);
-  let assemblyFormat = [{
-    $optionalValue `:` qualified(type($optionalValue)) `->` type($unwrapped)
-    attr-dict
-  }];
-  let hasVerifier = 1;
+  let assemblyFormat = "$optionalValue `:` type($unwrapped) attr-dict";
 }
 
 def Match_HasNameOp : Match_Op<"has_name"> {

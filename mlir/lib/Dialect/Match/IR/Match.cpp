@@ -312,13 +312,11 @@ StringRef SwitchTypeOp::getDefaultDialect() {
 // GetValueTypeOp
 //===----------------------------------------------------------------------===//
 
-LogicalResult GetValueTypeOp::verify() {
-  bool valueIsRange = llvm::isa<pdl::RangeType>(getValue().getType());
-  bool resultIsRange = llvm::isa<pdl::RangeType>(getResult().getType());
-  if (valueIsRange != resultIsRange)
-    return emitOpError(
-        "expected result to be a range iff the value is a range");
-  return success();
+/// Given the result type of a `GetValueTypeOp`, return the expected input type.
+static Type getGetValueTypeOpValueType(Type type) {
+  Type valueTy = pdl::ValueType::get(type.getContext());
+  return llvm::isa<pdl::RangeType>(type) ? pdl::RangeType::get(valueTy)
+                                         : valueTy;
 }
 
 //===----------------------------------------------------------------------===//
@@ -399,19 +397,6 @@ LogicalResult ForEachOp::verifyRegions() {
 
 StringRef ForEachOp::getDefaultDialect() {
   return MatchDialect::getDialectNamespace();
-}
-
-//===----------------------------------------------------------------------===//
-// IsNotNullOp
-//===----------------------------------------------------------------------===//
-
-LogicalResult IsNotNullOp::verify() {
-  auto optType = llvm::cast<OptionalType>(getOptionalValue().getType());
-  if (optType.getInnerType() != getUnwrapped().getType())
-    return emitOpError("expected unwrapped result type ")
-           << getUnwrapped().getType() << " to match inner type of optional "
-           << optType.getInnerType();
-  return success();
 }
 
 //===----------------------------------------------------------------------===//
