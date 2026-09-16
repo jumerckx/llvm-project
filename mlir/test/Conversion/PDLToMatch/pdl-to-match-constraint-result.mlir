@@ -41,7 +41,7 @@
 
 // CHECK:         %[[ATTR:.*]] = get_attribute "attr" of %{{.*}} : !match.optional<!pdl.attribute>
 // CHECK-NEXT:    %[[ATTRV:.*]] = is_not_null %[[ATTR]]
-// CHECK:         %[[DOP:.*]] = is_not_null %{{.*}} : !match.optional<!pdl.operation> -> !pdl.operation
+// CHECK:         %[[DOP:.*]] = is_not_null %{{.*}} : !pdl.operation
 // CHECK:         %[[RES:.*]] = apply_native_constraint "return_attr_constraint"(%[[DOP]] : !pdl.operation) : !pdl.attribute
 // CHECK-NEXT:    equal %[[RES]], %[[ATTRV]] : !pdl.attribute
 // The rewriter receives the navigated attribute, not the constraint result.
@@ -61,7 +61,7 @@
 // Split 4: a constraint returning a !pdl.type, tied to the result's type.
 //===----------------------------------------------------------------------===//
 
-// CHECK:         %[[T:.*]] = get_value_type of %{{.*}} : !pdl.value : !pdl.type
+// CHECK:         %[[T:.*]] = get_value_type of %{{.*}} : !pdl.type
 // CHECK-NEXT:    %[[C:.*]] = constant_attribute 10 : i64
 // CHECK-NEXT:    %[[RES:.*]] = apply_native_constraint "return_type_constr"(%[[C]] : !pdl.attribute) : !pdl.type
 // CHECK-NEXT:    equal %[[RES]], %[[T]] : !pdl.type
@@ -74,7 +74,7 @@
 
 // CHECK:         %[[RS:.*]] = get_results of %{{.*}} : !match.optional<!pdl.range<value>>
 // CHECK-NEXT:    %[[RVS:.*]] = is_not_null %[[RS]]
-// CHECK-NEXT:    %[[TS:.*]] = get_value_type of %[[RVS]] : !pdl.range<value> : !pdl.range<type>
+// CHECK-NEXT:    %[[TS:.*]] = get_value_type of %[[RVS]] : !pdl.range<type>
 // CHECK-NEXT:    %[[C:.*]] = constant_attribute 10 : i64
 // CHECK-NEXT:    %[[RES:.*]] = apply_native_constraint "return_type_range_constr"(%[[C]] : !pdl.attribute) : !pdl.range<type>
 // CHECK-NEXT:    equal %[[RES]], %[[TS]] : !pdl.range<type>
