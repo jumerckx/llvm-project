@@ -10,7 +10,7 @@ module {
 
   match.matcher @m root(%root : !pdl.operation) {
     %0 = match.get_results 1 of %root : !match.optional<!pdl.range<value>>
-    %1 = match.is_not_null %0 : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %1 = match.is_not_null %0 : !pdl.range<value>
     match.success @rewriters::@r benefit(1) (%root, %1 : !pdl.operation, !pdl.range<value>)
   }
 }

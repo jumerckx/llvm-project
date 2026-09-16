@@ -18,7 +18,7 @@ module {
     match.has_name %root, "arith.addf"
     match.check_operand_count %root is 2
     %0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
-    %1 = match.is_not_null %0 : !match.optional<!pdl.value> -> !pdl.value
+    %1 = match.is_not_null %0 : !pdl.value
     match.success @rewriters::@addf benefit(1) (%root, %1 : !pdl.operation, !pdl.value)
   }
 }

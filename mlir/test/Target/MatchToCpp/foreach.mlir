@@ -11,8 +11,8 @@ module {
 
   match.matcher @m root(%root : !pdl.operation) {
     %res = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %res : !match.optional<!pdl.value> -> !pdl.value
-    %users = match.get_users of %v : !pdl.range<operation>
+    %v = match.is_not_null %res : !pdl.value
+    %users = match.get_users of %v
     match.foreach %u in %users : !pdl.range<operation> {
       match.has_name %u, "test.use"
       match.success @rewriters::@r benefit(1) (%root, %u : !pdl.operation, !pdl.operation)
@@ -23,8 +23,8 @@ module {
   // enclosing scope rather than swallowing everything below it.
   match.matcher @fallback root(%root : !pdl.operation) {
     %res = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %res : !match.optional<!pdl.value> -> !pdl.value
-    %users = match.get_users of %v : !pdl.range<operation>
+    %v = match.is_not_null %res : !pdl.value
+    %users = match.get_users of %v
     match.foreach %u in %users : !pdl.range<operation> {
       match.has_name %u, "test.use"
       match.success @rewriters::@r benefit(2) (%root, %u : !pdl.operation, !pdl.operation)

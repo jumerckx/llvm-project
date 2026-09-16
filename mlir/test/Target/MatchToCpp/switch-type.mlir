@@ -10,8 +10,8 @@ module {
 
   match.matcher @sw_type root(%root : !pdl.operation) {
     %r = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.value
-    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    %v = match.is_not_null %r : !pdl.value
+    %t = match.get_value_type of %v : !pdl.type
     match.switch_type %t
     case i32 { match.success @rewriters::@r benefit(1) }
     case i64 { match.success @rewriters::@r benefit(2) }
