@@ -126,7 +126,7 @@ module {
 // The same folding for types: the navigation chain producing the tested type is
 // shared, so it is hoisted above the switch.
 // CHECK-LABEL: match.matcher @st_a root(%arg0: !pdl.operation) {
-// CHECK-NEXT:    %[[R:.*]] = get_result 0 of %arg0 : <!pdl.value>
+// CHECK-NEXT:    %[[R:.*]] = get_result 0 of %arg0 : !match.optional<!pdl.value>
 // CHECK-NEXT:    %[[V:.*]] = is_not_null %[[R]]
 // CHECK-NEXT:    %[[T:.*]] = get_value_type of %[[V]] : !pdl.value : !pdl.type
 // CHECK-NEXT:    switch_type %[[T]]
@@ -256,7 +256,7 @@ module {
 
 // CHECK-LABEL: match.matcher @dead_nav root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    has_name %arg0, "foo.op"
-// CHECK-NEXT:    %[[O:.*]] = get_operand 0 of %arg0 : <!pdl.value>
+// CHECK-NEXT:    %[[O:.*]] = get_operand 0 of %arg0 : !match.optional<!pdl.value>
 // CHECK-NEXT:    %{{.*}} = is_not_null %[[O]]
 // CHECK-NEXT:    success @rewriters::@r benefit(1)
 // CHECK-NOT:     get_value_type
@@ -281,7 +281,7 @@ module {
 // CHECK-LABEL: match.matcher @sink_a root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    has_name %arg0, "foo.op"
 // CHECK-NEXT:    try {
-// CHECK-NEXT:      %[[A:.*]] = get_attribute "attr" of %arg0 : <!pdl.attribute>
+// CHECK-NEXT:      %[[A:.*]] = get_attribute "attr" of %arg0 : !match.optional<!pdl.attribute>
 // CHECK-NEXT:      %[[AV:.*]] = is_not_null %[[A]]
 // CHECK-NEXT:      has_attr_value %[[AV]] is 10 : i64
 // CHECK:         try {
@@ -308,7 +308,7 @@ module {
 // prefix and is navigated once.
 // CHECK-LABEL: match.matcher @keep_a root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    has_name %arg0, "foo.op"
-// CHECK-NEXT:    %[[A:.*]] = get_attribute "attr" of %arg0 : <!pdl.attribute>
+// CHECK-NEXT:    %[[A:.*]] = get_attribute "attr" of %arg0 : !match.optional<!pdl.attribute>
 // CHECK-NEXT:    %[[AV:.*]] = is_not_null %[[A]]
 // CHECK-NEXT:    try {
 // CHECK-NEXT:      has_attr_value %[[AV]] is 10 : i64
