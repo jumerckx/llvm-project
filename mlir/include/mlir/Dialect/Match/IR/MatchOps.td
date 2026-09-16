@@ -302,7 +302,7 @@ def Match_GetOperandOp : Match_Op<"get_operand", [Pure]> {
   }];
   let arguments = (ins PDL_Operation:$op, I32Attr:$index);
   let results = (outs Match_OptionalType:$result);
-  let assemblyFormat = "$index `of` $op attr-dict `:` type($result)";
+  let assemblyFormat = "$index `of` $op attr-dict `:` qualified(type($result))";
 }
 
 def Match_GetOperandsOp : Match_Op<"get_operands", [Pure]> {
@@ -314,7 +314,8 @@ def Match_GetOperandsOp : Match_Op<"get_operands", [Pure]> {
   }];
   let arguments = (ins PDL_Operation:$op, OptionalAttr<I32Attr>:$index);
   let results = (outs Match_OptionalType:$result);
-  let assemblyFormat = "($index^)? `of` $op attr-dict `:` type($result)";
+  let assemblyFormat =
+      "($index^)? `of` $op attr-dict `:` qualified(type($result))";
 }
 
 def Match_GetResultOp : Match_Op<"get_result", [Pure]> {
@@ -325,7 +326,7 @@ def Match_GetResultOp : Match_Op<"get_result", [Pure]> {
   }];
   let arguments = (ins PDL_Operation:$op, I32Attr:$index);
   let results = (outs Match_OptionalType:$result);
-  let assemblyFormat = "$index `of` $op attr-dict `:` type($result)";
+  let assemblyFormat = "$index `of` $op attr-dict `:` qualified(type($result))";
 }
 
 def Match_GetResultsOp : Match_Op<"get_results", [Pure]> {
@@ -337,7 +338,8 @@ def Match_GetResultsOp : Match_Op<"get_results", [Pure]> {
   }];
   let arguments = (ins PDL_Operation:$op, OptionalAttr<I32Attr>:$index);
   let results = (outs Match_OptionalType:$result);
-  let assemblyFormat = "($index^)? `of` $op attr-dict `:` type($result)";
+  let assemblyFormat =
+      "($index^)? `of` $op attr-dict `:` qualified(type($result))";
 }
 
 def Match_GetAttributeOp : Match_Op<"get_attribute", [Pure]> {
@@ -348,7 +350,7 @@ def Match_GetAttributeOp : Match_Op<"get_attribute", [Pure]> {
   }];
   let arguments = (ins PDL_Operation:$op, StrAttr:$name);
   let results = (outs Match_OptionalType:$result);
-  let assemblyFormat = "$name `of` $op attr-dict `:` type($result)";
+  let assemblyFormat = "$name `of` $op attr-dict `:` qualified(type($result))";
 }
 
 def Match_GetDefiningOpOp : Match_Op<"get_defining_op", [Pure]> {
@@ -362,7 +364,7 @@ def Match_GetDefiningOpOp : Match_Op<"get_defining_op", [Pure]> {
   let arguments = (ins PDL_InstOrRangeOf<PDL_Value>:$value);
   let results = (outs Match_OptionalType:$result);
   let assemblyFormat =
-      "`of` $value `:` type($value) attr-dict `->` type($result)";
+      "`of` $value `:` type($value) attr-dict `->` qualified(type($result))";
 }
 
 //===----------------------------------------------------------------------===//
@@ -533,7 +535,8 @@ def Match_IsNotNullOp : Match_Op<"is_not_null"> {
   let arguments = (ins Match_OptionalType:$optionalValue);
   let results = (outs PDL_AnyType:$unwrapped);
   let assemblyFormat = [{
-    $optionalValue `:` type($optionalValue) `->` type($unwrapped) attr-dict
+    $optionalValue `:` qualified(type($optionalValue)) `->` type($unwrapped)
+    attr-dict
   }];
   let hasVerifier = 1;
 }
