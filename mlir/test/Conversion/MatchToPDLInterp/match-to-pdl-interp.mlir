@@ -237,8 +237,8 @@ module {
   module @rewriters { module @r {} }
   match.matcher @sw_type root(%root : !pdl.operation) {
     %r = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.value
-    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    %v = match.is_not_null %r : !pdl.value
+    %t = match.get_value_type of %v : !pdl.type
     match.switch_type %t
     case i32 { match.success @rewriters::@r benefit(1) }
     case i64 { match.success @rewriters::@r benefit(2) }
@@ -256,8 +256,8 @@ module {
   module @rewriters { module @r {} module @r0 {} }
   match.matcher @sw_type_name_scope root(%root : !pdl.operation) {
     %r = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.value
-    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    %v = match.is_not_null %r : !pdl.value
+    %t = match.get_value_type of %v : !pdl.type
     match.switch_type %t
     case i32 {
       match.has_name %root, "foo.op"
@@ -302,10 +302,10 @@ module {
   module @rewriters { module @r {} }
   match.matcher @each root(%root : !pdl.operation) {
     %rs = match.get_results of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %rs : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %rs : !pdl.range<value>
     match.foreach %e in %vs : !pdl.range<value> {
       %d = match.get_defining_op of %e : !pdl.value -> !match.optional<!pdl.operation>
-      %dop = match.is_not_null %d : !match.optional<!pdl.operation> -> !pdl.operation
+      %dop = match.is_not_null %d : !pdl.operation
       match.has_name %dop, "inner.op"
       match.success @rewriters::@r benefit(1) (%root, %dop : !pdl.operation, !pdl.operation)
     }
@@ -348,9 +348,9 @@ module {
   module @rewriters { module @r {} module @r0 {} }
   match.matcher @each_then_alternative root(%root : !pdl.operation) {
     %rs = match.get_results of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %rs : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %rs : !pdl.range<value>
     match.foreach %e in %vs : !pdl.range<value> {
-      %t = match.get_value_type of %e : !pdl.value : !pdl.type
+      %t = match.get_value_type of %e : !pdl.type
       match.has_type %t, i32
       match.success @rewriters::@r benefit(2)
     }
@@ -372,9 +372,9 @@ module {
   module @rewriters { module @r {} module @r0 {} }
   match.matcher @foreach_name_scope root(%root : !pdl.operation) {
     %os = match.get_operands of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %os : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %os : !pdl.range<value>
     match.foreach %e in %vs : !pdl.range<value> {
-      %users = match.get_users of %e : !pdl.range<operation>
+      %users = match.get_users of %e
       match.foreach %u in %users : !pdl.range<operation> {
         match.has_name %root, "foo.op"
         match.success @rewriters::@r benefit(1)
@@ -448,8 +448,8 @@ module {
   match.matcher @neg root(%root : !pdl.operation) {
     match.apply_native_constraint "c"(%root : !pdl.operation) is_negated = true
     %o = match.get_operand 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %o : !match.optional<!pdl.value> -> !pdl.value
-    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    %v = match.is_not_null %o : !pdl.value
+    %t = match.get_value_type of %v : !pdl.type
     match.has_type %t, i32
     match.success @rewriters::@r benefit(1)
   }
@@ -483,9 +483,9 @@ module {
   module @rewriters { module @r {} }
   match.matcher @nonroot root(%root : !pdl.operation) {
     %o = match.get_operand 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %o : !match.optional<!pdl.value> -> !pdl.value
+    %v = match.is_not_null %o : !pdl.value
     %d = match.get_defining_op of %v : !pdl.value -> !match.optional<!pdl.operation>
-    %dop = match.is_not_null %d : !match.optional<!pdl.operation> -> !pdl.operation
+    %dop = match.is_not_null %d : !pdl.operation
     match.has_name %dop, "other.op"
     match.success @rewriters::@r benefit(1)
   }
@@ -517,19 +517,19 @@ module {
     match.check_result_count %root is at_least 1
 
     %a = match.get_attribute "attr" of %root : !match.optional<!pdl.attribute>
-    %av = match.is_not_null %a : !match.optional<!pdl.attribute> -> !pdl.attribute
+    %av = match.is_not_null %a : !pdl.attribute
     match.has_attr_value %av is 10 : i64
-    %at = match.get_attribute_type of %av : !pdl.type
+    %at = match.get_attribute_type of %av
     match.has_type %at, i64
 
     %rs = match.get_results of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %rs : !match.optional<!pdl.range<value>> -> !pdl.range<value>
-    %ts = match.get_value_type of %vs : !pdl.range<value> : !pdl.range<type>
+    %vs = match.is_not_null %rs : !pdl.range<value>
+    %ts = match.get_value_type of %vs : !pdl.range<type>
     match.has_types %ts, [i32]
 
     %ex = match.extract 0 of %vs : !pdl.value
     %o = match.get_operand 0 of %root : !match.optional<!pdl.value>
-    %ov = match.is_not_null %o : !match.optional<!pdl.value> -> !pdl.value
+    %ov = match.is_not_null %o : !pdl.value
     match.equal %ex, %ov : !pdl.value
     match.success @rewriters::@r benefit(1)
   }
@@ -546,8 +546,8 @@ module {
   module @rewriters { module @r {} }
   match.matcher @users root(%root : !pdl.operation) {
     %o = match.get_operand 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %o : !match.optional<!pdl.value> -> !pdl.value
-    %u = match.get_users of %v : !pdl.range<operation>
+    %v = match.is_not_null %o : !pdl.value
+    %u = match.get_users of %v
     match.foreach %e in %u : !pdl.range<operation> {
       match.has_name %e, "user.op"
       match.success @rewriters::@r benefit(1) (%root, %e : !pdl.operation, !pdl.operation)
