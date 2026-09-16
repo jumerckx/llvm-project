@@ -128,7 +128,7 @@ module {
 // CHECK-LABEL: match.matcher @st_a root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    %[[R:.*]] = get_result 0 of %arg0 : !match.optional<!pdl.value>
 // CHECK-NEXT:    %[[V:.*]] = is_not_null %[[R]]
-// CHECK-NEXT:    %[[T:.*]] = get_value_type of %[[V]] : !pdl.value : !pdl.type
+// CHECK-NEXT:    %[[T:.*]] = get_value_type of %[[V]] : !pdl.type
 // CHECK-NEXT:    switch_type %[[T]]
 // CHECK-NEXT:    case i32 {
 // CHECK-NEXT:      success @rewriters::@r benefit(1)
@@ -140,15 +140,15 @@ module {
   module @rewriters { module @r {} module @r0 {} }
   match.matcher @st_a root(%root : !pdl.operation) {
     %r = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.value
-    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    %v = match.is_not_null %r : !pdl.value
+    %t = match.get_value_type of %v : !pdl.type
     match.has_type %t, i32
     match.success @rewriters::@r benefit(1)
   }
   match.matcher @st_b root(%root : !pdl.operation) {
     %r = match.get_result 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %r : !match.optional<!pdl.value> -> !pdl.value
-    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    %v = match.is_not_null %r : !pdl.value
+    %t = match.get_value_type of %v : !pdl.type
     match.has_type %t, i64
     match.success @rewriters::@r0 benefit(2)
   }
@@ -265,8 +265,8 @@ module {
   match.matcher @dead_nav root(%root : !pdl.operation) {
     match.has_name %root, "foo.op"
     %o = match.get_operand 0 of %root : !match.optional<!pdl.value>
-    %v = match.is_not_null %o : !match.optional<!pdl.value> -> !pdl.value
-    %t = match.get_value_type of %v : !pdl.value : !pdl.type
+    %v = match.is_not_null %o : !pdl.value
+    %t = match.get_value_type of %v : !pdl.type
     match.success @rewriters::@r benefit(1)
   }
 }
@@ -291,7 +291,7 @@ module {
   match.matcher @sink_a root(%root : !pdl.operation) {
     match.has_name %root, "foo.op"
     %a = match.get_attribute "attr" of %root : !match.optional<!pdl.attribute>
-    %av = match.is_not_null %a : !match.optional<!pdl.attribute> -> !pdl.attribute
+    %av = match.is_not_null %a : !pdl.attribute
     match.has_attr_value %av is 10 : i64
     match.success @rewriters::@r benefit(1)
   }
@@ -319,14 +319,14 @@ module {
   match.matcher @keep_a root(%root : !pdl.operation) {
     match.has_name %root, "foo.op"
     %a = match.get_attribute "attr" of %root : !match.optional<!pdl.attribute>
-    %av = match.is_not_null %a : !match.optional<!pdl.attribute> -> !pdl.attribute
+    %av = match.is_not_null %a : !pdl.attribute
     match.has_attr_value %av is 10 : i64
     match.success @rewriters::@r benefit(1)
   }
   match.matcher @keep_b root(%root : !pdl.operation) {
     match.has_name %root, "foo.op"
     %a = match.get_attribute "attr" of %root : !match.optional<!pdl.attribute>
-    %av = match.is_not_null %a : !match.optional<!pdl.attribute> -> !pdl.attribute
+    %av = match.is_not_null %a : !pdl.attribute
     match.has_attr_value %av is 20 : i64
     match.success @rewriters::@r0 benefit(2)
   }
@@ -352,9 +352,9 @@ module {
   match.matcher @each_a root(%root : !pdl.operation) {
     match.has_name %root, "foo.op"
     %rs = match.get_results of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %rs : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %rs : !pdl.range<value>
     match.foreach %e in %vs : !pdl.range<value> {
-      %t = match.get_value_type of %e : !pdl.value : !pdl.type
+      %t = match.get_value_type of %e : !pdl.type
       match.has_type %t, i32
       match.success @rewriters::@r benefit(1)
     }

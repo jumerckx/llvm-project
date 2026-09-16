@@ -59,10 +59,10 @@ module {
   module @rewriters { module @r {} }
   match.matcher @foreach_not_last root(%root : !pdl.operation) {
     %rs = match.get_results of %root : !match.optional<!pdl.range<value>>
-    %vs = match.is_not_null %rs : !match.optional<!pdl.range<value>> -> !pdl.range<value>
+    %vs = match.is_not_null %rs : !pdl.range<value>
     // expected-error @below {{combine-matchers requires `match.foreach` to be the last op in its block; ops following the loop would be absorbed into its body}}
     match.foreach %e in %vs : !pdl.range<value> {
-      %t = match.get_value_type of %e : !pdl.value : !pdl.type
+      %t = match.get_value_type of %e : !pdl.type
       match.has_type %t, i32
       match.success @rewriters::@r benefit(1)
     }
