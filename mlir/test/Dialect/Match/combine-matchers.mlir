@@ -4,7 +4,9 @@
 // predicates shared by several input matchers are emitted once in a shared
 // prefix, and each divergent suffix becomes a sibling `match.try`. A contiguous
 // run of alternatives that differ only in `has_name` / `has_type` on the same
-// value folds into a `switch_op_name` / `switch_type`.
+// value folds into a `switch_op_name` / `switch_type`. The result is named
+// `@combined`; only a lone matcher, which passes through untouched, keeps its
+// own name.
 //
 // Inputs here are written directly in match IR rather than piped through
 // `-convert-pdl-to-match`: they stay small and each isolates a single decision
@@ -51,10 +53,10 @@ module {
 
 //===----------------------------------------------------------------------===//
 // Two matchers with nothing in common become two sibling `try`s. The combined
-// matcher takes the symbol name of the *first* input matcher.
+// matcher is named `@combined`, not after either input.
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: match.matcher @disjoint_a root(%arg0: !pdl.operation) {
+// CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    try {
 // CHECK-NEXT:      check_operand_count %arg0 is 1
 // CHECK-NEXT:      success @rewriters::@r benefit(1)
@@ -85,7 +87,7 @@ module {
 // they are tested once instead of once per arm.
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: match.matcher @sw_a root(%arg0: !pdl.operation) {
+// CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    check_operand_count %arg0 is 0
 // CHECK-NEXT:    check_result_count %arg0 is 0
 // CHECK-NEXT:    switch_op_name %arg0
@@ -125,7 +127,7 @@ module {
 
 // The same folding for types: the navigation chain producing the tested type is
 // shared, so it is hoisted above the switch.
-// CHECK-LABEL: match.matcher @st_a root(%arg0: !pdl.operation) {
+// CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    %[[R:.*]] = get_result 0 of %arg0 : !match.optional<!pdl.value>
 // CHECK-NEXT:    %[[V:.*]] = is_not_null %[[R]]
 // CHECK-NEXT:    %[[T:.*]] = get_value_type of %[[V]] : !pdl.type
@@ -158,7 +160,7 @@ module {
 
 // A switch needs at least two cases: a lone `has_name` alternative stays a
 // plain `try` rather than becoming a one-case switch.
-// CHECK-LABEL: match.matcher @one_case_a
+// CHECK-LABEL: match.matcher @combined
 // CHECK-NOT:     switch_op_name
 // CHECK:         try {
 // CHECK-NEXT:      has_name %{{.*}}, "foo.op"
@@ -179,7 +181,7 @@ module {
 // Folding requires a *contiguous* run. Here two `has_name` alternatives are
 // separated by one that tests something else, so no switch is formed and all
 // three stay sibling `try`s.
-// CHECK-LABEL: match.matcher @nc_a
+// CHECK-LABEL: match.matcher @combined
 // CHECK-NOT:     switch_op_name
 // CHECK:         try {
 // CHECK-NEXT:      has_name %{{.*}}, "foo.op"
@@ -211,7 +213,7 @@ module {
 // insertion order would have tested `check_operand_count is 7` first.
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: match.matcher @cost_a root(%arg0: !pdl.operation) {
+// CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    try {
 // CHECK-NEXT:      check_result_count %arg0 is 1
 // CHECK-NEXT:      try {
@@ -278,7 +280,7 @@ module {
 // alternative's `try` body, so the other alternative does not pay for it.
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: match.matcher @sink_a root(%arg0: !pdl.operation) {
+// CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    has_name %arg0, "foo.op"
 // CHECK-NEXT:    try {
 // CHECK-NEXT:      %[[A:.*]] = get_attribute "attr" of %arg0 : !match.optional<!pdl.attribute>
@@ -306,7 +308,7 @@ module {
 
 // The mirror case: a chain used by *both* alternatives stays in the shared
 // prefix and is navigated once.
-// CHECK-LABEL: match.matcher @keep_a root(%arg0: !pdl.operation) {
+// CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    has_name %arg0, "foo.op"
 // CHECK-NEXT:    %[[A:.*]] = get_attribute "attr" of %arg0 : !match.optional<!pdl.attribute>
 // CHECK-NEXT:    %[[AV:.*]] = is_not_null %[[A]]
@@ -338,7 +340,7 @@ module {
 // matcher's chain becomes its body. It needs no `try` wrapper of its own --
 // exhausting the range already falls through to the next alternative -- so the
 // only `try`s here are the two top-level alternatives.
-// CHECK-LABEL: match.matcher @each_a
+// CHECK-LABEL: match.matcher @combined
 // CHECK:         try {
 // CHECK:           foreach %[[E:.*]] in %{{.*}} : !pdl.range<value> {
 // CHECK-NEXT:        %[[T:.*]] = get_value_type of %[[E]]
@@ -374,7 +376,7 @@ module {
 
 // The same literal in two input matchers collapses to a single pool op: the
 // pool key is `(op name, attributes, operands)` and a constant has no operands.
-// CHECK-LABEL: match.matcher @shared
+// CHECK-LABEL: match.matcher @combined
 module {
   module @rewriters {
     module @r {}
@@ -407,7 +409,7 @@ module {
 
 // A literal used by only one alternative lives inside that alternative's `try`
 // body, not in the shared prefix.
-// CHECK-LABEL: match.matcher @sunk
+// CHECK-LABEL: match.matcher @combined
 // CHECK-NOT: constant_attribute
 // CHECK: try {
 // CHECK: constant_attribute 10 : i64

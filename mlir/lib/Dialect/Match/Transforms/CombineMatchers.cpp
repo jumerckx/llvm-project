@@ -836,8 +836,10 @@ void Combiner::emitCombinedMatcher() {
   builder.setInsertionPointToStart(module.getBody());
 
   StringAttr symName;
-  if (auto firstName = matcherInfos.front().matcher.getSymNameAttr())
-    symName = firstName;
+  if (matcherInfos.size() == 1)
+    symName = matcherInfos.front().matcher.getSymNameAttr();
+  else
+    symName = builder.getStringAttr("combined");
 
   auto combined = MatcherOp::create(builder, loc, symName);
   Block *body = &combined.getBodyRegion().emplaceBlock();
