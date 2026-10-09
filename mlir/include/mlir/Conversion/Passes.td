@@ -1148,6 +1148,12 @@ def ConvertPDLToPDLInterpPass : Pass<"convert-pdl-to-pdl-interp", "ModuleOp"> {
   let dependentDialects = ["pdl_interp::PDLInterpDialect"];
 }
 
+def ConvertMatchToPDLInterpPass
+    : Pass<"convert-match-to-pdl-interp", "ModuleOp"> {
+  let summary = "Lower match matchers to PDL interpreter ops";
+  let dependentDialects = ["pdl_interp::PDLInterpDialect"];
+}
+
 //===----------------------------------------------------------------------===//
 // ReconcileUnrealizedCasts
 //===----------------------------------------------------------------------===//
