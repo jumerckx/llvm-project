@@ -55,6 +55,7 @@
 #include "mlir/Dialect/MLProgram/IR/MLProgram.h"
 #include "mlir/Dialect/MLProgram/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/MPI/IR/MPI.h"
+#include "mlir/Dialect/Match/IR/Match.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRefDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRefMemorySlot.h"
@@ -133,6 +134,7 @@ void mlir::registerAllDialects(DialectRegistry &registry) {
                   irdl::IRDLDialect,
                   linalg::LinalgDialect,
                   LLVM::LLVMDialect,
+                  match::MatchDialect,
                   math::MathDialect,
                   memref::MemRefDialect,
                   shard::ShardDialect,
