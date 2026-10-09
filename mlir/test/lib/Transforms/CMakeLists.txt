@@ -50,6 +50,7 @@ mlir_target_link_libraries(MLIRTestTransforms PUBLIC
   MLIRAnalysis
   MLIRFuncDialect
   MLIRInferIntRangeInterface
+  MLIRMatchDialect
   MLIRTransforms
   MLIRTransformDialect
   )

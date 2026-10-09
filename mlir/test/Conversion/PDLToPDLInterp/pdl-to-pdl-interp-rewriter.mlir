@@ -274,7 +274,9 @@ module @named_pattern {
   // CHECK: ^bb3:
   // CHECK:   pdl_interp.check_result_count of %[[ARG0]] is 0 -> ^bb4, ^bb1
   // CHECK: ^bb4:
-  // CHECK:   pdl_interp.record_match @rewriters::@my_pattern(%[[ARG0]] : !pdl.operation) : benefit(1), loc([%[[ARG0]]]), root("foo.op") -> ^bb1
+  // CHECK:   pdl_interp.record_match @rewriters::@my_pattern(%[[ARG0]] : !pdl.operation) : benefit(1), loc([%[[ARG0]]]), root("foo.op") -> ^bb5
+  // CHECK: ^bb5:
+  // CHECK:   pdl_interp.branch ^bb1
   // CHECK: }
   // CHECK: module @rewriters {
   // CHECK:   pdl_interp.func @my_pattern(%[[ARG0:.*]]: !pdl.operation) {

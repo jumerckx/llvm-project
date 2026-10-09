@@ -37,9 +37,9 @@ pdl.pattern : benefit(1) {
 // -----
 
 // CHECK-LABEL: matcher
-// CHECK: %[[CONSTRAINT:.*]] = pdl_interp.apply_constraint "return_value_constr"
 // CHECK: %[[VALUE:.*]] = pdl_interp.get_operand 0
-// CHECK: pdl_interp.are_equal %[[VALUE:.*]], %[[CONSTRAINT:.*]]
+// CHECK: %[[CONSTRAINT:.*]] = pdl_interp.apply_constraint "return_value_constr"
+// CHECK: pdl_interp.are_equal %[[CONSTRAINT]], %[[VALUE]]
 
 pdl.pattern : benefit(1) {
     %attr = attribute = 10

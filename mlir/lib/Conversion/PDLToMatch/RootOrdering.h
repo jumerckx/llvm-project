@@ -16,8 +16,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_LIB_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H_
-#define MLIR_LIB_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H_
+#ifndef MLIR_LIB_CONVERSION_PDLTOMATCH_ROOTORDERING_H_
+#define MLIR_LIB_CONVERSION_PDLTOMATCH_ROOTORDERING_H_
 
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/DenseMap.h"
@@ -26,7 +26,7 @@
 #include <vector>
 
 namespace mlir {
-namespace pdl_to_pdl_interp {
+namespace pdl_to_match {
 
 /// The information associated with an edge in the cost graph. Each node in
 /// the cost graph corresponds to a candidate root detected in the pdl.pattern,
@@ -82,7 +82,7 @@ using RootOrderingGraph = DenseMap<Value, DenseMap<Value, RootOrderingEntry>>;
 /// This is a direct implementation of the Edmonds' algorithm, see
 /// https://en.wikipedia.org/wiki/Edmonds%27_algorithm. The worst-case
 /// computational complexity of this algorithm is O(N^3), for a single root.
-/// The PDL-to-PDLInterp lowering calls this N times (once for each candidate
+/// The PDL-to-Match lowering calls this N times (once for each candidate
 /// root), so the overall complexity root ordering is O(N^4). If needed, this
 /// could be reduced to O(N^3) with a more efficient algorithm. However, note
 /// that the underlying implementation is very efficient, and N in our
@@ -131,7 +131,7 @@ private:
   DenseMap<Value, Value> parents;
 };
 
-} // namespace pdl_to_pdl_interp
+} // namespace pdl_to_match
 } // namespace mlir
 
-#endif // MLIR_CONVERSION_PDLTOPDLINTERP_ROOTORDERING_H_
+#endif // MLIR_CONVERSION_PDLTOMATCH_ROOTORDERING_H_

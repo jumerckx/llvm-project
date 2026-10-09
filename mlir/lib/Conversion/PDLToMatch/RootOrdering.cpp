@@ -18,7 +18,7 @@
 #include <utility>
 
 using namespace mlir;
-using namespace mlir::pdl_to_pdl_interp;
+using namespace mlir::pdl_to_match;
 
 /// Returns the cycle implied by the specified parent relation, starting at the
 /// given node.

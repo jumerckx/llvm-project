@@ -8,6 +8,7 @@
 
 #include "TestDialect.h"
 #include "TestOps.h"
+#include "mlir/Dialect/Match/IR/Match.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/Interfaces/CastInterfaces.h"
@@ -27,7 +28,8 @@ struct TestPDLLPass : public PassWrapper<TestPDLLPass, OperationPass<>> {
   StringRef getArgument() const final { return "test-pdll-pass"; }
   StringRef getDescription() const final { return "Test PDLL functionality"; }
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<pdl::PDLDialect, pdl_interp::PDLInterpDialect, test::TestDialect>();
+    registry.insert<match::MatchDialect, pdl::PDLDialect,
+                    pdl_interp::PDLInterpDialect, test::TestDialect>();
   }
   LogicalResult initialize(MLIRContext *ctx) override {
     // Build the pattern set within the `initialize` to avoid recompiling PDL

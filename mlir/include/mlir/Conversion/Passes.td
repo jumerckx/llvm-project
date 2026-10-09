@@ -1143,9 +1143,15 @@ def ConvertOpenMPToLLVMPass : Pass<"convert-openmp-to-llvm", "ModuleOp"> {
 // PDLToPDLInterp
 //===----------------------------------------------------------------------===//
 
+def ConvertPDLToMatchPass : Pass<"convert-pdl-to-match", "ModuleOp"> {
+  let summary = "Convert PDL patterns to match matchers";
+  let dependentDialects = ["match::MatchDialect"];
+}
+
 def ConvertPDLToPDLInterpPass : Pass<"convert-pdl-to-pdl-interp", "ModuleOp"> {
   let summary = "Convert PDL ops to PDL interpreter ops";
-  let dependentDialects = ["pdl_interp::PDLInterpDialect"];
+  let dependentDialects = ["match::MatchDialect",
+                           "pdl_interp::PDLInterpDialect"];
 }
 
 def ConvertMatchToPDLInterpPass

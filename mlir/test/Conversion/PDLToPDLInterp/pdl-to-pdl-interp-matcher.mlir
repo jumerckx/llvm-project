@@ -1,31 +1,17 @@
 // RUN: mlir-opt -split-input-file -convert-pdl-to-pdl-interp %s | FileCheck %s
 
 // CHECK-LABEL: module @empty_module
+// CHECK:         pdl_interp.func @matcher
+// CHECK:           pdl_interp.finalize
 module @empty_module {
-// CHECK: func @matcher(%{{.*}}: !pdl.operation)
-// CHECK-NEXT: pdl_interp.finalize
 }
 
 // -----
 
 // CHECK-LABEL: module @simple
+// CHECK:         pdl_interp.check_operation_name of %arg0 is "foo.op"
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter(%arg0 : !pdl.operation) : benefit(1), loc([%arg0]), root("foo.op")
 module @simple {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK:   pdl_interp.check_operation_name of %[[ROOT]] is "foo.op" -> ^bb2, ^bb1
-  // CHECK: ^bb1:
-  // CHECK:   pdl_interp.finalize
-  // CHECK: ^bb2:
-  // CHECK:   pdl_interp.check_operand_count of %[[ROOT]] is 0 -> ^bb3, ^bb1
-  // CHECK: ^bb3:
-  // CHECK:   pdl_interp.check_result_count of %[[ROOT]] is 0 -> ^bb4, ^bb1
-  // CHECK: ^bb4:
-  // CHECK:   pdl_interp.record_match @rewriters::@pdl_generated_rewriter
-  // CHECK-SAME: benefit(1), loc([%[[ROOT]]]), root("foo.op") -> ^bb1
-
-  // CHECK: module @rewriters
-  // CHECK:   func @pdl_generated_rewriter(%[[REWRITE_ROOT:.*]]: !pdl.operation)
-  // CHECK:     pdl_interp.apply_rewrite "rewriter"(%[[REWRITE_ROOT]]
-  // CHECK:     pdl_interp.finalize
   pdl.pattern : benefit(1) {
     %root = operation "foo.op"
     rewrite %root with "rewriter"
@@ -35,18 +21,11 @@ module @simple {
 // -----
 
 // CHECK-LABEL: module @attributes
+// CHECK:         pdl_interp.get_attribute "attr" of %arg0
+// CHECK:         pdl_interp.check_attribute %{{.*}} is 10 : i64
+// CHECK:         pdl_interp.get_attribute_type of
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter
 module @attributes {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // Check the value of "attr".
-  // CHECK-DAG:   %[[ATTR:.*]] = pdl_interp.get_attribute "attr" of %[[ROOT]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[ATTR]] : !pdl.attribute
-  // CHECK-DAG:   pdl_interp.check_attribute %[[ATTR]] is 10 : i64
-
-  // Check the type of "attr1".
-  // CHECK-DAG:   %[[ATTR1:.*]] = pdl_interp.get_attribute "attr1" of %[[ROOT]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[ATTR1]] : !pdl.attribute
-  // CHECK-DAG:   %[[ATTR1_TYPE:.*]] = pdl_interp.get_attribute_type of %[[ATTR1]]
-  // CHECK-DAG:   pdl_interp.check_type %[[ATTR1_TYPE]] is i64
   pdl.pattern : benefit(1) {
     %type = type : i64
     %attr = attribute = 10 : i64
@@ -59,13 +38,9 @@ module @attributes {
 // -----
 
 // CHECK-LABEL: module @constraints
+// CHECK:         pdl_interp.apply_constraint "multi_constraint"(%{{.*}}, %{{.*}}, %{{.*}} : !pdl.value, !pdl.value, !pdl.value)
+// CHECK:         pdl_interp.record_match
 module @constraints {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK-DAG:   %[[INPUT:.*]] = pdl_interp.get_operand 0 of %[[ROOT]]
-  // CHECK-DAG:   %[[INPUT1:.*]] = pdl_interp.get_operand 1 of %[[ROOT]]
-  // CHECK-DAG:   %[[RESULT:.*]] = pdl_interp.get_result 0 of %[[ROOT]]
-  // CHECK:       pdl_interp.apply_constraint "multi_constraint"(%[[INPUT]], %[[INPUT1]], %[[RESULT]]
-
   pdl.pattern : benefit(1) {
     %input0 = operand
     %input1 = operand
@@ -80,10 +55,9 @@ module @constraints {
 // -----
 
 // CHECK-LABEL: module @constraint_with_result
+// CHECK:         %[[C:.*]] = pdl_interp.apply_constraint "check_op_and_get_attr_constr"(%arg0 : !pdl.operation) : !pdl.attribute
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter(%arg0, %[[C]] : !pdl.operation, !pdl.attribute)
 module @constraint_with_result {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK: %[[ATTR:.*]] = pdl_interp.apply_constraint "check_op_and_get_attr_constr"(%[[ROOT]]
-  // CHECK: pdl_interp.record_match @rewriters::@pdl_generated_rewriter(%[[ROOT]], %[[ATTR]] : !pdl.operation, !pdl.attribute)
   pdl.pattern : benefit(1) {
     %root = operation
     %attr = pdl.apply_native_constraint "check_op_and_get_attr_constr"(%root : !pdl.operation) : !pdl.attribute
@@ -94,10 +68,9 @@ module @constraint_with_result {
 // -----
 
 // CHECK-LABEL: module @constraint_with_unused_result
+// CHECK:         pdl_interp.apply_constraint "check_op_and_get_attr_constr"
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter(%arg0 : !pdl.operation)
 module @constraint_with_unused_result {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK: %[[ATTR:.*]] = pdl_interp.apply_constraint "check_op_and_get_attr_constr"(%[[ROOT]]
-  // CHECK: pdl_interp.record_match @rewriters::@pdl_generated_rewriter(%[[ROOT]] : !pdl.operation)
   pdl.pattern : benefit(1) {
     %root = operation
     %attr = pdl.apply_native_constraint "check_op_and_get_attr_constr"(%root : !pdl.operation) : !pdl.attribute
@@ -108,14 +81,9 @@ module @constraint_with_unused_result {
 // -----
 
 // CHECK-LABEL: module @constraint_with_result_multiple
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter_0
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter
 module @constraint_with_result_multiple {
-  // check that native constraints work as expected even when multiple identical constraints are fused
-
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK: %[[ATTR:.*]] = pdl_interp.apply_constraint "check_op_and_get_attr_constr"(%[[ROOT]]
-  // CHECK-NOT: pdl_interp.apply_constraint "check_op_and_get_attr_constr"
-  // CHECK: pdl_interp.record_match @rewriters::@pdl_generated_rewriter_0(%[[ROOT]], %[[ATTR]]  : !pdl.operation, !pdl.attribute)
-  // CHECK: pdl_interp.record_match @rewriters::@pdl_generated_rewriter(%[[ROOT]], %[[ATTR]] : !pdl.operation, !pdl.attribute)
   pdl.pattern : benefit(1) {
     %root = operation
     %attr = pdl.apply_native_constraint "check_op_and_get_attr_constr"(%root : !pdl.operation) : !pdl.attribute
@@ -131,10 +99,8 @@ module @constraint_with_result_multiple {
 // -----
 
 // CHECK-LABEL: module @negated_constraint
+// CHECK:         pdl_interp.apply_constraint "constraint"(%arg0 : !pdl.operation) is_negated = true
 module @negated_constraint {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK: pdl_interp.apply_constraint "constraint"(%[[ROOT]] : !pdl.operation) is_negated = true
-  // CHECK: pdl_interp.record_match @rewriters::@pdl_generated_rewriter(%[[ROOT]] : !pdl.operation)
   pdl.pattern : benefit(1) {
     %root = operation
     pdl.apply_native_constraint "constraint"(%root : !pdl.operation) is_negated = true
@@ -145,19 +111,10 @@ module @negated_constraint {
 // -----
 
 // CHECK-LABEL: module @inputs
+// CHECK:         pdl_interp.check_operand_count of %arg0 is 2
+// CHECK:         pdl_interp.are_equal
+// CHECK:         pdl_interp.record_match
 module @inputs {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK-DAG: pdl_interp.check_operand_count of %[[ROOT]] is 2
-
-  // Get the input and check the type.
-  // CHECK-DAG:   %[[INPUT:.*]] = pdl_interp.get_operand 0 of %[[ROOT]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[INPUT]] : !pdl.value
-  // CHECK-DAG:   %[[INPUT_TYPE:.*]] = pdl_interp.get_value_type of %[[INPUT]]
-  // CHECK-DAG:   pdl_interp.check_type %[[INPUT_TYPE]] is i64
-
-  // Get the second operand and check that it is equal to the first.
-  // CHECK-DAG:  %[[INPUT1:.*]] = pdl_interp.get_operand 1 of %[[ROOT]]
-  // CHECK-DAG:  pdl_interp.are_equal %[[INPUT]], %[[INPUT1]] : !pdl.value
   pdl.pattern : benefit(1) {
     %type = type : i64
     %input = operand : %type
@@ -169,25 +126,10 @@ module @inputs {
 // -----
 
 // CHECK-LABEL: module @variadic_inputs
+// CHECK:         pdl_interp.check_operand_count of %arg0 is at_least 2
+// CHECK:         pdl_interp.check_types
+// CHECK:         pdl_interp.record_match
 module @variadic_inputs {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK-DAG: pdl_interp.check_operand_count of %[[ROOT]] is at_least 2
-
-  // The first operand has a known index.
-  // CHECK-DAG:   %[[INPUT:.*]] = pdl_interp.get_operand 0 of %[[ROOT]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[INPUT]] : !pdl.value
-
-  // The second operand is a group of unknown size, with a type constraint.
-  // CHECK-DAG:   %[[VAR_INPUTS:.*]] = pdl_interp.get_operands 1 of %[[ROOT]] : !pdl.range<value>
-  // CHECK-DAG:   pdl_interp.is_not_null %[[VAR_INPUTS]] : !pdl.range<value>
-
-  // CHECK-DAG:   %[[INPUT_TYPE:.*]] = pdl_interp.get_value_type of %[[VAR_INPUTS]] : !pdl.range<type>
-  // CHECK-DAG:   pdl_interp.check_types %[[INPUT_TYPE]] are [i64]
-
-  // The third operand is at an unknown offset due to operand 2, but is expected
-  // to be of size 1.
-  // CHECK-DAG:  %[[INPUT2:.*]] = pdl_interp.get_operands 2 of %[[ROOT]] : !pdl.value
-  // CHECK-DAG:  pdl_interp.are_equal %[[INPUT]], %[[INPUT2]] : !pdl.value
   pdl.pattern : benefit(1) {
     %types = types : [i64]
     %inputs = operands : %types
@@ -200,17 +142,9 @@ module @variadic_inputs {
 // -----
 
 // CHECK-LABEL: module @single_operand_range
+// CHECK:         pdl_interp.get_operands of %arg0 : !pdl.range<value>
+// CHECK:         pdl_interp.record_match
 module @single_operand_range {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-
-  // Check that the operand range is treated as all of the operands of the
-  // operation.
-  // CHECK-DAG:   %[[RESULTS:.*]] = pdl_interp.get_operands of %[[ROOT]]
-  // CHECK-DAG:   %[[RESULT_TYPES:.*]] = pdl_interp.get_value_type of %[[RESULTS]] : !pdl.range<type>
-  // CHECK-DAG:   pdl_interp.check_types %[[RESULT_TYPES]] are [i64]
-
-  // The operand count is unknown, so there is no need to check for it.
-  // CHECK-NOT: pdl_interp.check_operand_count
   pdl.pattern : benefit(1) {
     %types = types : [i64]
     %operands = operands : %types
@@ -222,19 +156,10 @@ module @single_operand_range {
 // -----
 
 // CHECK-LABEL: module @results
+// CHECK:         pdl_interp.check_result_count of %arg0 is 2
+// CHECK:         pdl_interp.check_type
+// CHECK:         pdl_interp.record_match
 module @results {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK:   pdl_interp.check_result_count of %[[ROOT]] is 2
-
-  // Get the result and check the type.
-  // CHECK-DAG:   %[[RESULT:.*]] = pdl_interp.get_result 0 of %[[ROOT]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[RESULT]] : !pdl.value
-  // CHECK-DAG:   %[[RESULT_TYPE:.*]] = pdl_interp.get_value_type of %[[RESULT]]
-  // CHECK-DAG:   pdl_interp.check_type %[[RESULT_TYPE]] is i32
-
-  // The second result doesn't have any constraints, so we don't generate an
-  // access for it.
-  // CHECK-NOT:   pdl_interp.get_result 1 of %[[ROOT]]
   pdl.pattern : benefit(1) {
     %type1 = type : i32
     %type2 = type
@@ -246,25 +171,9 @@ module @results {
 // -----
 
 // CHECK-LABEL: module @variadic_results
+// CHECK:         pdl_interp.check_result_count of %arg0 is at_least 2
+// CHECK:         pdl_interp.record_match
 module @variadic_results {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK-DAG: pdl_interp.check_result_count of %[[ROOT]] is at_least 2
-
-  // The first result has a known index.
-  // CHECK-DAG:   %[[RESULT:.*]] = pdl_interp.get_result 0 of %[[ROOT]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[RESULT]] : !pdl.value
-
-  // The second result is a group of unknown size, with a type constraint.
-  // CHECK-DAG:   %[[VAR_RESULTS:.*]] = pdl_interp.get_results 1 of %[[ROOT]] : !pdl.range<value>
-  // CHECK-DAG:   pdl_interp.is_not_null %[[VAR_RESULTS]] : !pdl.range<value>
-
-  // CHECK-DAG:   %[[RESULT_TYPE:.*]] = pdl_interp.get_value_type of %[[VAR_RESULTS]] : !pdl.range<type>
-  // CHECK-DAG:   pdl_interp.check_types %[[RESULT_TYPE]] are [i64]
-
-  // The third result is at an unknown offset due to result 1, but is expected
-  // to be of size 1.
-  // CHECK-DAG:  %[[RESULT2:.*]] = pdl_interp.get_results 2 of %[[ROOT]] : !pdl.value
-  // CHECK-DAG:   pdl_interp.is_not_null %[[RESULT2]] : !pdl.value
   pdl.pattern : benefit(1) {
     %types = types : [i64]
     %type = type
@@ -276,17 +185,9 @@ module @variadic_results {
 // -----
 
 // CHECK-LABEL: module @single_result_range
+// CHECK:         pdl_interp.get_results of %arg0 : !pdl.range<value>
+// CHECK:         pdl_interp.record_match
 module @single_result_range {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-
-  // Check that the result range is treated as all of the results of the
-  // operation.
-  // CHECK-DAG:   %[[RESULTS:.*]] = pdl_interp.get_results of %[[ROOT]]
-  // CHECK-DAG:   %[[RESULT_TYPES:.*]] = pdl_interp.get_value_type of %[[RESULTS]] : !pdl.range<type>
-  // CHECK-DAG:   pdl_interp.check_types %[[RESULT_TYPES]] are [i64]
-
-  // The result count is unknown, so there is no need to check for it.
-  // CHECK-NOT: pdl_interp.check_result_count
   pdl.pattern : benefit(1) {
     %types = types : [i64]
     %root = operation -> (%types : !pdl.range<type>)
@@ -297,24 +198,10 @@ module @single_result_range {
 // -----
 
 // CHECK-LABEL: module @results_as_operands
+// CHECK:         pdl_interp.get_defining_op of
+// CHECK:         pdl_interp.are_equal
+// CHECK:         pdl_interp.record_match
 module @results_as_operands {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-
-  // Get the first result and check it matches the first operand.
-  // CHECK-DAG:   %[[OPERAND_0:.*]] = pdl_interp.get_operand 0 of %[[ROOT]]
-  // CHECK-DAG:   %[[DEF_OP_0:.*]] = pdl_interp.get_defining_op of %[[OPERAND_0]]
-  // CHECK-DAG:   %[[RESULT_0:.*]] = pdl_interp.get_result 0 of %[[DEF_OP_0]]
-  // CHECK-DAG:   pdl_interp.are_equal %[[RESULT_0]], %[[OPERAND_0]]
-
-  // Get the second result and check it matches the second operand.
-  // CHECK-DAG:   %[[OPERAND_1:.*]] = pdl_interp.get_operand 1 of %[[ROOT]]
-  // CHECK-DAG:   %[[DEF_OP_1:.*]] = pdl_interp.get_defining_op of %[[OPERAND_1]]
-  // CHECK-DAG:   %[[RESULT_1:.*]] = pdl_interp.get_result 1 of %[[DEF_OP_1]]
-  // CHECK-DAG:   pdl_interp.are_equal %[[RESULT_1]], %[[OPERAND_1]]
-
-  // Check that the parent operation of both results is the same.
-  // CHECK-DAG:   pdl_interp.are_equal %[[DEF_OP_0]], %[[DEF_OP_1]]
-
   pdl.pattern : benefit(1) {
     %type1 = type : i32
     %type2 = type
@@ -330,14 +217,9 @@ module @results_as_operands {
 // -----
 
 // CHECK-LABEL: module @single_result_range_as_operands
+// CHECK:         pdl_interp.get_defining_op of
+// CHECK:         pdl_interp.record_match
 module @single_result_range_as_operands {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK-DAG:  %[[OPERANDS:.*]] = pdl_interp.get_operands of %[[ROOT]] : !pdl.range<value>
-  // CHECK-DAG:  %[[OP:.*]] = pdl_interp.get_defining_op of %[[OPERANDS]] : !pdl.range<value>
-  // CHECK-DAG:  pdl_interp.is_not_null %[[OP]]
-  // CHECK-DAG:  %[[RESULTS:.*]] = pdl_interp.get_results of %[[OP]] : !pdl.range<value>
-  // CHECK-DAG:  pdl_interp.are_equal %[[RESULTS]], %[[OPERANDS]] : !pdl.range<value>
-
   pdl.pattern : benefit(1) {
     %types = types
     %inputOp = operation -> (%types : !pdl.range<type>)
@@ -351,11 +233,10 @@ module @single_result_range_as_operands {
 // -----
 
 // CHECK-LABEL: module @switch_single_result_type
+// CHECK:         pdl_interp.switch_type %{{.*}} to [i32, i64]
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter_0
 module @switch_single_result_type {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK:   %[[RESULT:.*]] = pdl_interp.get_result 0 of %[[ROOT]]
-  // CHECK:   %[[RESULT_TYPE:.*]] = pdl_interp.get_value_type of %[[RESULT]]
-  // CHECK:   pdl_interp.switch_type %[[RESULT_TYPE]] to [i32, i64]
   pdl.pattern : benefit(1) {
     %type = type : i32
     %root = operation -> (%type : !pdl.type)
@@ -371,11 +252,9 @@ module @switch_single_result_type {
 // -----
 
 // CHECK-LABEL: module @switch_result_types
+// CHECK:         pdl_interp.check_types
+// CHECK:         pdl_interp.record_match
 module @switch_result_types {
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK:   %[[RESULTS:.*]] = pdl_interp.get_results of %[[ROOT]]
-  // CHECK:   %[[RESULT_TYPES:.*]] = pdl_interp.get_value_type of %[[RESULTS]]
-  // CHECK:   pdl_interp.switch_types %[[RESULT_TYPES]] to {{\[\[}}i32], [i64, i32]]
   pdl.pattern : benefit(1) {
     %types = types : [i32]
     %root = operation -> (%types : !pdl.range<type>)
@@ -391,16 +270,10 @@ module @switch_result_types {
 // -----
 
 // CHECK-LABEL: module @switch_operand_count_at_least
+// CHECK:         pdl_interp.check_operand_count of %arg0 is at_least
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter
+// CHECK:         pdl_interp.record_match @rewriters::@pdl_generated_rewriter_0
 module @switch_operand_count_at_least {
-  // Check that when there are multiple "at_least" checks, the failure branch
-  // goes to the next one in increasing order.
-
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK: pdl_interp.check_operand_count of %[[ROOT]] is at_least 1 -> ^[[PATTERN_1_NEXT_BLOCK:.*]],
-  // CHECK: ^bb2:
-  // CHECK-NEXT: pdl_interp.check_operand_count of %[[ROOT]] is at_least 2
-  // CHECK: ^[[PATTERN_1_NEXT_BLOCK]]:
-  // CHECK-NEXT: {{.*}} -> ^{{.*}}, ^bb2
   pdl.pattern : benefit(1) {
     %operand = operand
     %operands = operands
@@ -419,17 +292,10 @@ module @switch_operand_count_at_least {
 // -----
 
 // CHECK-LABEL: module @switch_result_count_at_least
+// CHECK:         pdl_interp.check_result_count of %arg0 is at_least
+// CHECK:         pdl_interp.record_match
+// CHECK:         pdl_interp.record_match
 module @switch_result_count_at_least {
-  // Check that when there are multiple "at_least" checks, the failure branch
-  // goes to the next one in increasing order.
-
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK: pdl_interp.check_result_count of %[[ROOT]] is at_least 1 -> ^[[PATTERN_1_NEXT_BLOCK:.*]],
-  // CHECK: ^[[PATTERN_2_BLOCK:[a-zA-Z_0-9]*]]:
-  // CHECK: pdl_interp.check_result_count of %[[ROOT]] is at_least 2
-  // CHECK: ^[[PATTERN_1_NEXT_BLOCK]]:
-  // CHECK-NEXT: pdl_interp.get_result
-  // CHECK-NEXT: pdl_interp.is_not_null {{.*}} -> ^{{.*}}, ^[[PATTERN_2_BLOCK]]
   pdl.pattern : benefit(1) {
     %type = type
     %types = types
@@ -445,21 +311,12 @@ module @switch_result_count_at_least {
   }
 }
 
-
 // -----
 
 // CHECK-LABEL: module @predicate_ordering
+// CHECK:         pdl_interp.apply_constraint "typeConstraint"
+// CHECK:         pdl_interp.record_match
 module @predicate_ordering {
-  // Check that the result is checked for null first, before applying the
-  // constraint. The null check is prevalent in both patterns, so should be
-  // prioritized first.
-
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK:   %[[RESULT:.*]] = pdl_interp.get_result 0 of %[[ROOT]]
-  // CHECK-NEXT: pdl_interp.is_not_null %[[RESULT]]
-  // CHECK:   %[[RESULT_TYPE:.*]] = pdl_interp.get_value_type of %[[RESULT]]
-  // CHECK: pdl_interp.apply_constraint "typeConstraint"(%[[RESULT_TYPE]]
-
   pdl.pattern : benefit(1) {
     %resultType = type
     pdl.apply_native_constraint "typeConstraint"(%resultType : !pdl.type)
@@ -474,31 +331,13 @@ module @predicate_ordering {
   }
 }
 
-
 // -----
 
 // CHECK-LABEL: module @multi_root
+// CHECK:         pdl_interp.get_users of
+// CHECK:         pdl_interp.foreach %[[E:.*]] : !pdl.operation in
+// CHECK:         pdl_interp.record_match @rewriters::@rewrite_multi_root(%arg0, %[[E]] : !pdl.operation, !pdl.operation)
 module @multi_root {
-  // Check the lowering of a simple two-root pattern.
-  // This checks that we correctly generate the pdl_interp.choose_op operation
-  // and tie the break between %root1 and %root2 in favor of %root1.
-
-  // CHECK: func @matcher(%[[ROOT1:.*]]: !pdl.operation)
-  // CHECK-DAG: %[[VAL1:.*]] = pdl_interp.get_operand 0 of %[[ROOT1]]
-  // CHECK-DAG: %[[OP1:.*]] = pdl_interp.get_defining_op of %[[VAL1]]
-  // CHECK-DAG: %[[OPS:.*]] = pdl_interp.get_users of %[[VAL1]] : !pdl.value
-  // CHECK-DAG: pdl_interp.foreach %[[ROOT2:.*]] : !pdl.operation in %[[OPS]]
-  // CHECK-DAG:   %[[OPERANDS:.*]] = pdl_interp.get_operand 0 of %[[ROOT2]]
-  // CHECK-DAG:   pdl_interp.are_equal %[[OPERANDS]], %[[VAL1]] : !pdl.value -> ^{{.*}}, ^[[CONTINUE:.*]]
-  // CHECK-DAG:   pdl_interp.continue
-  // CHECK-DAG:   %[[VAL2:.*]] = pdl_interp.get_operand 1 of %[[ROOT2]]
-  // CHECK-DAG:   %[[OP2:.*]] = pdl_interp.get_defining_op of %[[VAL2]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[OP1]] : !pdl.operation -> ^{{.*}}, ^[[CONTINUE]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[OP2]] : !pdl.operation
-  // CHECK-DAG:   pdl_interp.is_not_null %[[VAL1]] : !pdl.value
-  // CHECK-DAG:   pdl_interp.is_not_null %[[VAL2]] : !pdl.value
-  // CHECK-DAG:   pdl_interp.is_not_null %[[ROOT2]] : !pdl.operation
-
   pdl.pattern @rewrite_multi_root : benefit(1) {
     %input1 = operand
     %input2 = operand
@@ -513,24 +352,12 @@ module @multi_root {
   }
 }
 
-
 // -----
 
 // CHECK-LABEL: module @overlapping_roots
+// CHECK-NOT:     pdl_interp.foreach
+// CHECK:         pdl_interp.record_match @rewriters::@rewrite_overlapping_roots
 module @overlapping_roots {
-  // Check the lowering of a degenerate two-root pattern, where one root
-  // is in the subtree rooted at another.
-
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK-DAG: %[[VAL:.*]] = pdl_interp.get_operand 0 of %[[ROOT]]
-  // CHECK-DAG: %[[OP:.*]] = pdl_interp.get_defining_op of %[[VAL]]
-  // CHECK-DAG: %[[INPUT1:.*]] = pdl_interp.get_operand 0 of %[[OP]]
-  // CHECK-DAG: %[[INPUT2:.*]] = pdl_interp.get_operand 1 of %[[OP]]
-  // CHECK-DAG: pdl_interp.is_not_null %[[VAL]] : !pdl.value
-  // CHECK-DAG: pdl_interp.is_not_null %[[OP]] : !pdl.operation
-  // CHECK-DAG: pdl_interp.is_not_null %[[INPUT1]] : !pdl.value
-  // CHECK-DAG: pdl_interp.is_not_null %[[INPUT2]] : !pdl.value
-
   pdl.pattern @rewrite_overlapping_roots : benefit(1) {
     %input1 = operand
     %input2 = operand
@@ -545,24 +372,9 @@ module @overlapping_roots {
 // -----
 
 // CHECK-LABEL: module @force_overlapped_root
+// CHECK:         pdl_interp.foreach
+// CHECK:         pdl_interp.record_match @rewriters::@rewrite_forced_overlapped_root
 module @force_overlapped_root {
-  // Check the lowering of a degenerate two-root pattern, where one root
-  // is in the subtree rooted at another, and we are forced to use this
-  // root as the root of the search tree.
-
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK-DAG: %[[VAL:.*]] = pdl_interp.get_result 0 of %[[ROOT]]
-  // CHECK-DAG: pdl_interp.check_operand_count of %[[ROOT]] is 2
-  // CHECK-DAG: pdl_interp.check_result_count of %[[ROOT]] is 1
-  // CHECK-DAG: %[[INPUT2:.*]] = pdl_interp.get_operand 1 of %[[ROOT]]
-  // CHECK-DAG: pdl_interp.is_not_null %[[INPUT2]] : !pdl.value
-  // CHECK-DAG: %[[INPUT1:.*]] = pdl_interp.get_operand 0 of %[[ROOT]]
-  // CHECK-DAG: pdl_interp.is_not_null %[[INPUT1]] : !pdl.value
-  // CHECK-DAG: %[[OPS:.*]] = pdl_interp.get_users of %[[VAL]] : !pdl.value
-  // CHECK-DAG: pdl_interp.foreach %[[OP:.*]] : !pdl.operation in %[[OPS]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[OP]] : !pdl.operation
-  // CHECK-DAG:   pdl_interp.check_operand_count of %[[OP]] is 1
-
   pdl.pattern @rewrite_forced_overlapped_root : benefit(1) {
     %input1 = operand
     %input2 = operand
@@ -577,20 +389,10 @@ module @force_overlapped_root {
 // -----
 
 // CHECK-LABEL: module @variadic_results_all
+// CHECK:         pdl_interp.extract 0 of
+// CHECK:         pdl_interp.foreach
+// CHECK:         pdl_interp.record_match @rewriters::@variadic_results_all
 module @variadic_results_all {
-  // Check the correct lowering when using all results of an operation
-  // and passing it them as operands to another operation.
-
-  // CHECK: func @matcher(%[[ROOT:.*]]: !pdl.operation)
-  // CHECK-DAG: pdl_interp.check_operand_count of %[[ROOT]] is 0
-  // CHECK-DAG: %[[VALS:.*]] = pdl_interp.get_results of %[[ROOT]] : !pdl.range<value>
-  // CHECK-DAG: %[[VAL0:.*]] = pdl_interp.extract 0 of %[[VALS]]
-  // CHECK-DAG: %[[OPS:.*]] = pdl_interp.get_users of %[[VAL0]] : !pdl.value
-  // CHECK-DAG: pdl_interp.foreach %[[OP:.*]] : !pdl.operation in %[[OPS]]
-  // CHECK-DAG:   %[[OPERANDS:.*]] = pdl_interp.get_operands of %[[OP]]
-  // CHECK-DAG:    pdl_interp.are_equal %[[OPERANDS]], %[[VALS]] : !pdl.range<value> -> ^{{.*}}, ^[[CONTINUE:.*]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[OP]]
-  // CHECK-DAG:   pdl_interp.check_result_count of %[[OP]] is 0
   pdl.pattern @variadic_results_all : benefit(1) {
     %types = types
     %root = operation -> (%types : !pdl.range<type>)
@@ -603,29 +405,10 @@ module @variadic_results_all {
 // -----
 
 // CHECK-LABEL: module @variadic_results_at
+// CHECK:         pdl_interp.extract 0 of
+// CHECK:         pdl_interp.foreach
+// CHECK:         pdl_interp.record_match @rewriters::@variadic_results_at
 module @variadic_results_at {
-  // Check the correct lowering when using selected results of an operation
-  // and passing it them as an operand to another operation.
-
-  // CHECK: func @matcher(%[[ROOT1:.*]]: !pdl.operation)
-  // CHECK-DAG: %[[VALS:.*]] = pdl_interp.get_operands 0 of %[[ROOT1]] : !pdl.range<value>
-  // CHECK-DAG: %[[OP:.*]] = pdl_interp.get_defining_op of %[[VALS]] : !pdl.range<value>
-  // CHECK-DAG: pdl_interp.is_not_null %[[OP]] : !pdl.operation
-  // CHECK-DAG: pdl_interp.check_operand_count of %[[ROOT1]] is at_least 1
-  // CHECK-DAG: pdl_interp.check_result_count of %[[ROOT1]] is 0
-  // CHECK-DAG: %[[VAL:.*]] = pdl_interp.get_operands 1 of %[[ROOT1]] : !pdl.value
-  // CHECK-DAG: pdl_interp.is_not_null %[[VAL]]
-  // CHECK-DAG: pdl_interp.is_not_null %[[VALS]]
-  // CHECK-DAG: %[[VAL0:.*]] = pdl_interp.extract 0 of %[[VALS]]
-  // CHECK-DAG: %[[ROOTS2:.*]] = pdl_interp.get_users of %[[VAL0]] : !pdl.value
-  // CHECK-DAG: pdl_interp.foreach %[[ROOT2:.*]] : !pdl.operation in %[[ROOTS2]] {
-  // CHECK-DAG:   %[[OPERANDS:.*]] = pdl_interp.get_operands 1 of %[[ROOT2]]
-  // CHECK-DAG:   pdl_interp.are_equal %[[OPERANDS]], %[[VALS]] : !pdl.range<value> -> ^{{.*}}, ^[[CONTINUE:.*]]
-  // CHECK-DAG:   pdl_interp.is_not_null %[[ROOT2]]
-  // CHECK-DAG:   pdl_interp.check_operand_count of %[[ROOT2]] is at_least 1
-  // CHECK-DAG:   pdl_interp.check_result_count of %[[ROOT2]] is 0
-  // CHECK-DAG:   pdl_interp.check_operand_count of %[[OP]] is 0
-  // CHECK-DAG:   pdl_interp.check_result_count of %[[OP]] is at_least 1
   pdl.pattern @variadic_results_at : benefit(1) {
     %type = type
     %types = types
@@ -641,12 +424,9 @@ module @variadic_results_at {
 // -----
 
 // CHECK-LABEL: module @attribute_literal
+// CHECK:         %[[A:.*]] = pdl_interp.create_attribute 10 : i64
+// CHECK:         pdl_interp.apply_constraint "constraint"(%[[A]] : !pdl.attribute)
 module @attribute_literal {
-  // CHECK: func @matcher(%{{.*}}: !pdl.operation)
-  // CHECK: %[[ATTR:.*]] = pdl_interp.create_attribute 10 : i64
-  // CHECK: pdl_interp.apply_constraint "constraint"(%[[ATTR]] : !pdl.attribute)
-
-  // Check the correct lowering of an attribute that hasn't been bound.
   pdl.pattern : benefit(1) {
     %attr = attribute = 10
     pdl.apply_native_constraint "constraint"(%attr: !pdl.attribute)
@@ -659,13 +439,10 @@ module @attribute_literal {
 // -----
 
 // CHECK-LABEL: module @type_literal
+// CHECK:         %[[T:.*]] = pdl_interp.create_type i32
+// CHECK:         %[[TS:.*]] = pdl_interp.create_types [i32, i64]
+// CHECK:         pdl_interp.apply_constraint "constraint"(%[[T]], %[[TS]] : !pdl.type, !pdl.range<type>)
 module @type_literal {
-  // CHECK: func @matcher(%{{.*}}: !pdl.operation)
-  // CHECK: %[[TYPE:.*]] = pdl_interp.create_type i32
-  // CHECK: %[[TYPES:.*]] = pdl_interp.create_types [i32, i64]
-  // CHECK: pdl_interp.apply_constraint "constraint"(%[[TYPE]], %[[TYPES]] : !pdl.type, !pdl.range<type>)
-
-  // Check the correct lowering of a type that hasn't been bound.
   pdl.pattern : benefit(1) {
     %type = type : i32
     %types = types : [i32, i64]
@@ -679,29 +456,9 @@ module @type_literal {
 // -----
 
 // CHECK-LABEL: module @common_connector
+// CHECK:         pdl_interp.foreach
+// CHECK:         pdl_interp.record_match @rewriters::@common_connector
 module @common_connector {
-  // Check the correct lowering when multiple roots are using the same
-  // connector.
-
-  // CHECK: func @matcher(%[[ROOTC:.*]]: !pdl.operation)
-  // CHECK-DAG: %[[VAL2:.*]] = pdl_interp.get_operand 0 of %[[ROOTC]]
-  // CHECK-DAG: %[[INTER:.*]] = pdl_interp.get_defining_op of %[[VAL2]] : !pdl.value
-  // CHECK-DAG: pdl_interp.is_not_null %[[INTER]] : !pdl.operation -> ^bb2, ^bb1
-  // CHECK-DAG: %[[VAL1:.*]] = pdl_interp.get_operand 0 of %[[INTER]]
-  // CHECK-DAG: %[[OP:.*]] = pdl_interp.get_defining_op of %[[VAL1]] : !pdl.value
-  // CHECK-DAG: pdl_interp.is_not_null %[[OP]]
-  // CHECK-DAG: %[[VAL0:.*]] = pdl_interp.get_result 0 of %[[OP]]
-  // CHECK-DAG: %[[ROOTS:.*]] = pdl_interp.get_users of %[[VAL0]] : !pdl.value
-  // CHECK-DAG: pdl_interp.foreach %[[ROOTA:.*]] : !pdl.operation in %[[ROOTS]] {
-  // CHECK-DAG:   pdl_interp.is_not_null %[[ROOTA]] : !pdl.operation -> ^{{.*}}, ^[[CONTA:.*]]
-  // CHECK-DAG:   pdl_interp.continue
-  // CHECK-DAG:   pdl_interp.foreach %[[ROOTB:.*]] : !pdl.operation in %[[ROOTS]] {
-  // CHECK-DAG:     pdl_interp.is_not_null %[[ROOTB]] : !pdl.operation -> ^{{.*}}, ^[[CONTB:.*]]
-  // CHECK-DAG:     %[[ROOTA_OP:.*]] = pdl_interp.get_operand 0 of %[[ROOTA]]
-  // CHECK-DAG:     pdl_interp.are_equal %[[ROOTA_OP]], %[[VAL0]] : !pdl.value
-  // CHECK-DAG:     %[[ROOTB_OP:.*]] = pdl_interp.get_operand 0 of %[[ROOTB]]
-  // CHECK-DAG:     pdl_interp.are_equal %[[ROOTB_OP]], %[[VAL0]] : !pdl.value
-  // CHECK-DAG:    } -> ^[[CONTA:.*]]
   pdl.pattern @common_connector : benefit(1) {
       %type = type
       %op = operation -> (%type, %type : !pdl.type, !pdl.type)
@@ -719,30 +476,10 @@ module @common_connector {
 // -----
 
 // CHECK-LABEL: module @common_connector_range
+// CHECK:         pdl_interp.extract 0 of
+// CHECK:         pdl_interp.foreach
+// CHECK:         pdl_interp.record_match @rewriters::@common_connector_range
 module @common_connector_range {
-  // Check the correct lowering when multiple roots are using the same
-  // connector range.
-
-  // CHECK: func @matcher(%[[ROOTC:.*]]: !pdl.operation)
-  // CHECK-DAG: %[[VALS2:.*]] = pdl_interp.get_operands of %[[ROOTC]] : !pdl.range<value>
-  // CHECK-DAG: %[[INTER:.*]] = pdl_interp.get_defining_op of %[[VALS2]] : !pdl.range<value>
-  // CHECK-DAG: pdl_interp.is_not_null %[[INTER]] : !pdl.operation -> ^bb2, ^bb1
-  // CHECK-DAG: %[[VALS1:.*]] = pdl_interp.get_operands of %[[INTER]] : !pdl.range<value>
-  // CHECK-DAG: %[[OP:.*]] = pdl_interp.get_defining_op of %[[VALS1]] : !pdl.range<value>
-  // CHECK-DAG: pdl_interp.is_not_null %[[OP]]
-  // CHECK-DAG: %[[VALS0:.*]] = pdl_interp.get_results 0 of %[[OP]]
-  // CHECK-DAG: %[[VAL0:.*]] = pdl_interp.extract 0 of %[[VALS0]] : !pdl.value
-  // CHECK-DAG: %[[ROOTS:.*]] = pdl_interp.get_users of %[[VAL0]] : !pdl.value
-  // CHECK-DAG: pdl_interp.foreach %[[ROOTA:.*]] : !pdl.operation in %[[ROOTS]] {
-  // CHECK-DAG:   pdl_interp.is_not_null %[[ROOTA]] : !pdl.operation -> ^{{.*}}, ^[[CONTA:.*]]
-  // CHECK-DAG:   pdl_interp.continue
-  // CHECK-DAG:   pdl_interp.foreach %[[ROOTB:.*]] : !pdl.operation in %[[ROOTS]] {
-  // CHECK-DAG:     pdl_interp.is_not_null %[[ROOTB]] : !pdl.operation -> ^{{.*}}, ^[[CONTB:.*]]
-  // CHECK-DAG:     %[[ROOTA_OPS:.*]] = pdl_interp.get_operands of %[[ROOTA]]
-  // CHECK-DAG:     pdl_interp.are_equal %[[ROOTA_OPS]], %[[VALS0]] : !pdl.range<value>
-  // CHECK-DAG:     %[[ROOTB_OPS:.*]] = pdl_interp.get_operands of %[[ROOTB]]
-  // CHECK-DAG:     pdl_interp.are_equal %[[ROOTB_OPS]], %[[VALS0]] : !pdl.range<value>
-  // CHECK-DAG:    } -> ^[[CONTA:.*]]
   pdl.pattern @common_connector_range : benefit(1) {
     %types = types
     %op = operation -> (%types, %types : !pdl.range<type>, !pdl.range<type>)

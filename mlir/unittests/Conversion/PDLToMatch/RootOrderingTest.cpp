@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "../lib/Conversion/PDLToPDLInterp/RootOrdering.h"
+#include "../lib/Conversion/PDLToMatch/RootOrdering.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
@@ -14,7 +14,7 @@
 
 using namespace mlir;
 using namespace mlir::arith;
-using namespace mlir::pdl_to_pdl_interp;
+using namespace mlir::pdl_to_match;
 
 namespace {
 

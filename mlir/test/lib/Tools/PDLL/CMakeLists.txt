@@ -25,6 +25,7 @@ add_mlir_library(MLIRTestPDLL
 mlir_target_link_libraries(MLIRTestPDLL PUBLIC
   MLIRCastInterfaces
   MLIRIR
+  MLIRMatchDialect
   MLIRPass
   MLIRPDLInterpDialect
   MLIRPDLDialect
