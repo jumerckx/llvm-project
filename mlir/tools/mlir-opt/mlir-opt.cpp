@@ -167,6 +167,7 @@ void registerTestXeGPULowerings();
 void registerTestDialectConversionPasses();
 void registerTestPDLByteCodePass();
 void registerTestPDLLPasses();
+void registerTestMatchToCppPass();
 #endif
 } // namespace test
 } // namespace mlir
@@ -316,6 +317,7 @@ static void registerTestPasses() {
   mlir::test::registerTestDialectConversionPasses();
   mlir::test::registerTestPDLByteCodePass();
   mlir::test::registerTestPDLLPasses();
+  mlir::test::registerTestMatchToCppPass();
 #endif
 }
 #endif
