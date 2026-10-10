@@ -55,6 +55,7 @@ struct MatcherInfo {
   MatcherOp matcher;
   SuccessOp success;
   DenseSet<Operation *> preds;
+  SmallVector<Operation *> guards;
   IRMapping toCanonical;
 };
 
@@ -96,6 +97,7 @@ private:
   DenseMap<Operation *, unsigned> insertionIndex;
   unsigned nextInsertionIndex = 0;
   std::vector<Operation *> sortedPoolOps;
+  DenseSet<std::pair<Operation *, Operation *>> guardEdges;
   std::vector<MatcherInfo> matcherInfos;
   std::unique_ptr<TreeNode> treeRoot;
 };
@@ -162,6 +164,13 @@ LogicalResult Combiner::collectPredicates(Block &block, MatcherInfo &info) {
 
     if (info.preds.insert(poolOp).second)
       ++primary[poolOp];
+
+    if (isa<ApplyNativeConstraintOp>(poolOp)) {
+      for (Operation *guard : info.guards)
+        guardEdges.insert({guard, poolOp});
+    } else {
+      info.guards.push_back(poolOp);
+    }
 
     if (auto forEach = dyn_cast<ForEachOp>(&op)) {
       info.toCanonical.map(forEach.getLoopVariable(),
@@ -243,7 +252,10 @@ void Combiner::sortCanonicalPool() {
     return std::make_tuple(primary[a], secondary[a], insertionIndex[b]) >
            std::make_tuple(primary[b], secondary[b], insertionIndex[a]);
   });
-  stableTopologicalSort(sortedPoolOps.begin(), sortedPoolOps.end(), dependsOn);
+  stableTopologicalSort(sortedPoolOps.begin(), sortedPoolOps.end(),
+                        [&](Operation *a, Operation *b) {
+                          return dependsOn(a, b) || guardEdges.contains({a, b});
+                        });
   for (Operation *op : sortedPoolOps)
     op->moveBefore(poolBody.get(), poolBody->end());
 }

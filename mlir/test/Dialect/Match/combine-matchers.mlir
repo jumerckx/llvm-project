@@ -369,3 +369,38 @@ module {
     match.success @rewriters::@r benefit(1)
   }
 }
+
+// -----
+
+// CHECK-LABEL: match.matcher @combined
+// CHECK-NOT:     apply_native_constraint
+// CHECK:         switch_op_name %arg0
+// CHECK-NEXT:    case "foo.op" {
+// CHECK-NEXT:      apply_native_constraint "guarded"(%arg0 : !pdl.operation)
+// CHECK:         case "bar.op" {
+// CHECK-NEXT:      apply_native_constraint "guarded"(%arg0 : !pdl.operation)
+// CHECK:         case "baz.op" {
+// CHECK-NEXT:      apply_native_constraint "guarded"(%arg0 : !pdl.operation)
+module {
+  module @rewriters {
+    module @r {}
+  }
+
+  match.matcher @a root(%root : !pdl.operation) {
+    match.has_name %root, "foo.op"
+    match.apply_native_constraint "guarded"(%root : !pdl.operation)
+    match.success @rewriters::@r benefit(1)
+  }
+
+  match.matcher @b root(%root : !pdl.operation) {
+    match.has_name %root, "bar.op"
+    match.apply_native_constraint "guarded"(%root : !pdl.operation)
+    match.success @rewriters::@r benefit(1)
+  }
+
+  match.matcher @c root(%root : !pdl.operation) {
+    match.has_name %root, "baz.op"
+    match.apply_native_constraint "guarded"(%root : !pdl.operation)
+    match.success @rewriters::@r benefit(1)
+  }
+}
