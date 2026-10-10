@@ -94,6 +94,20 @@ struct TestMatchToCppPass
   }
 };
 
+class CountRewritesConfig : public PDLPatternConfigBase<CountRewritesConfig> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CountRewritesConfig)
+
+  CountRewritesConfig(int64_t &begun, int64_t &ended)
+      : begun(begun), ended(ended) {}
+  void notifyRewriteBegin(PatternRewriter &) final { ++begun; }
+  void notifyRewriteEnd(PatternRewriter &) final { ++ended; }
+
+private:
+  int64_t &begun;
+  int64_t &ended;
+};
+
 struct TestMatchToCppPDLPass
     : public PassWrapper<TestMatchToCppPDLPass, OperationPass<>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestMatchToCppPDLPass)
@@ -107,10 +121,17 @@ struct TestMatchToCppPDLPass
   }
 
   void runOnOperation() final {
+    int64_t begun = 0, ended = 0;
     RewritePatternSet patterns(&getContext());
-    pdl_patterns::populateGeneratedPatterns(patterns);
+    pdl_patterns::populateGeneratedPatterns(patterns,
+                                            CountRewritesConfig(begun, ended));
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
-      signalPassFailure();
+      return signalPassFailure();
+    Builder builder(&getContext());
+    getOperation()->setAttr("test.rewrites_begun",
+                            builder.getI64IntegerAttr(begun));
+    getOperation()->setAttr("test.rewrites_ended",
+                            builder.getI64IntegerAttr(ended));
   }
 };
 } // namespace

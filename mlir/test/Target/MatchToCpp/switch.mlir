@@ -17,11 +17,11 @@ module {
 
 // CHECK:   ::llvm::StringRef name0 = op->getName().getStringRef();
 // CHECK:   if (name0 == "arith.addi") {
-// CHECK:     if (::mlir::succeeded(rewrite_addi(rewriter, op)))
+// CHECK:     if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_addi(rewriter, op); })))
 // CHECK:       return ::mlir::success();
 // CHECK:   }
 // CHECK:   else if (name0 == "arith.subi") {
-// CHECK:     if (::mlir::succeeded(rewrite_subi(rewriter, op)))
+// CHECK:     if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_subi(rewriter, op); })))
 // CHECK:       return ::mlir::success();
 // CHECK:   }
 // CHECK:   return ::mlir::failure();

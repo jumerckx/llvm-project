@@ -19,12 +19,12 @@ module {
 // CHECK-NOT: getName().getStringRef()
 // CHECK:   if (::llvm::isa<::mlir::arith::AddIOp>(op)) {
 // CHECK:     ::mlir::arith::AddIOp castedOp0 = ::llvm::cast<::mlir::arith::AddIOp>(op);
-// CHECK:     if (::mlir::succeeded(rewrite_addi(rewriter, op)))
+// CHECK:     if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_addi(rewriter, op); })))
 // CHECK:       return ::mlir::success();
 // CHECK:   }
 // CHECK:   else if (::llvm::isa<::mlir::arith::SubIOp>(op)) {
 // CHECK:     ::mlir::arith::SubIOp castedOp1 = ::llvm::cast<::mlir::arith::SubIOp>(op);
-// CHECK:     if (::mlir::succeeded(rewrite_subi(rewriter, op)))
+// CHECK:     if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_subi(rewriter, op); })))
 // CHECK:       return ::mlir::success();
 // CHECK:   }
 // CHECK:   return ::mlir::failure();

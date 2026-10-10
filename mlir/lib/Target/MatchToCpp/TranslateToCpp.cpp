@@ -337,12 +337,14 @@ LogicalResult MatcherCppEmitter::emitSuccess(SuccessOp op) {
   std::string call;
   {
     llvm::raw_string_ostream cs(call);
-    cs << fnName << "(rewriter";
+    cs << "::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { "
+          "return "
+       << fnName << "(rewriter";
     if (rewriterOp)
       cs << ", " << locExpr();
     for (Value in : op.getInputs())
       cs << ", " << getName(in);
-    cs << ")";
+    cs << "); })";
   }
 
   uint64_t benefit = op.getBenefit();
@@ -864,18 +866,22 @@ LogicalResult MatcherCppEmitter::emitMatcher(MatcherOp matcher, unsigned idx) {
 
   os << "namespace {\n";
   os << "struct " << structName << " : public ::mlir::RewritePattern {\n";
-  os << "  " << structName << "(::mlir::MLIRContext *context)\n";
+  os << "  " << structName
+     << "(::mlir::MLIRContext *context,\n"
+        "      ::std::shared_ptr<::mlir::PDLPatternConfigSet> configSet)\n";
   os << "      : ::mlir::RewritePattern(";
   if (rootKind.empty())
     os << "::mlir::Pattern::MatchAnyOpTypeTag()";
   else
     os << "\"" << rootKind << "\"";
-  os << ", " << maxBenefit << ", context) {}\n";
+  os << ", " << maxBenefit << ", context),\n";
+  os << "        configSet(::std::move(configSet)) {}\n";
   os << "  ::llvm::LogicalResult\n";
   os << "  matchAndRewrite(::mlir::Operation *op,\n";
   os << "                  ::mlir::PatternRewriter &rewriter) const override "
         "{\n";
   indentLevel = 2;
+  indent() << "::mlir::PDLPatternConfigSet *configs = configSet.get();\n";
   if (anyDeferred) {
     indent() << "unsigned deferredBenefit = 0;\n";
     indent() << "::llvm::unique_function<::llvm::LogicalResult()> deferred;\n";
@@ -901,6 +907,7 @@ LogicalResult MatcherCppEmitter::emitMatcher(MatcherOp matcher, unsigned idx) {
   }
   indentLevel = 0;
   os << "  }\n";
+  os << "  ::std::shared_ptr<::mlir::PDLPatternConfigSet> configSet;\n";
   os << "};\n";
   os << "} // namespace\n\n";
   return success();
@@ -1139,6 +1146,7 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root,
   os << "#include \"mlir/Target/MatchToCpp/Runtime.h\"\n";
   os << "#include \"llvm/ADT/FunctionExtras.h\"\n";
   os << "#include \"llvm/ADT/STLExtras.h\"\n";
+  os << "#include <memory>\n";
   os << "#include <optional>\n";
   os << "\n";
   os << "#if defined(__GNUC__)\n";
@@ -1159,11 +1167,18 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root,
   os << rewriters;
   os << structs;
 
-  os << "void populateGeneratedPatterns(::mlir::RewritePatternSet &set) {\n";
+  os << "template <typename... ConfigsT>\n"
+        "[[maybe_unused]] static void\n"
+        "populateGeneratedPatterns(::mlir::RewritePatternSet &set,\n"
+        "                          ConfigsT &&...configs) {\n";
+  os << "  ::std::shared_ptr<::mlir::PDLPatternConfigSet> configSet;\n";
+  os << "  if constexpr (sizeof...(ConfigsT) != 0)\n";
+  os << "    configSet = ::std::make_shared<::mlir::PDLPatternConfigSet>(\n";
+  os << "        ::std::forward<ConfigsT>(configs)...);\n";
   if (!structNames.empty()) {
     os << "  set.add<";
     llvm::interleaveComma(structNames, os);
-    os << ">(set.getContext());\n";
+    os << ">(set.getContext(), configSet);\n";
   }
   os << "}\n";
 

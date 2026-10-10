@@ -74,4 +74,4 @@ module {
 // CHECK-LABEL: struct GeneratedMatcher_0
 // CHECK:   ::mlir::Attribute v{{[0-9]+}} = v{{[0-9]+}}->getAttr("value");
 // CHECK:   rewriter.setInsertionPoint(op);
-// CHECK:   if (::mlir::succeeded(rewrite_lower(rewriter, rewriter.getFusedLoc({op->getLoc(), v{{[0-9]+}}->getLoc()}), op, v{{[0-9]+}}, v{{[0-9]+}})))
+// CHECK:   if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_lower(rewriter, rewriter.getFusedLoc({op->getLoc(), v{{[0-9]+}}->getLoc()}), op, v{{[0-9]+}}, v{{[0-9]+}}); })))

@@ -22,4 +22,4 @@ module {
 // CHECK:     return ::mlir::failure();
 // CHECK:   if (::mlir::succeeded(::mlir::match::runtime::callNative(checkPDLFn, rewriter, ::std::tie(), v1, v2)))
 // CHECK:     return ::mlir::failure();
-// CHECK:   if (::mlir::succeeded(rewrite_r(rewriter, op, v1)))
+// CHECK:   if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_r(rewriter, op, v1); })))

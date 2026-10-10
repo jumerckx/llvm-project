@@ -1,5 +1,7 @@
 // RUN: mlir-opt %s --test-match-to-cpp-pdl --allow-unregistered-dialect | FileCheck %s
 
+// CHECK: module attributes {test.rewrites_begun = 6 : i64, test.rewrites_ended = 6 : i64}
+
 // CHECK-LABEL: func @fold_add
 // CHECK-SAME:    (%[[ARG:.*]]: i32)
 // CHECK:         %[[R:.*]] = "test.folded"(%[[ARG]]) {value = 5 : i32} : (i32) -> i32

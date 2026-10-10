@@ -37,7 +37,7 @@ module {
 // CHECK:   for (::mlir::Operation * v2 : v1) {
 // CHECK:     if (v2->getName().getStringRef() != "test.use")
 // CHECK:       continue;
-// CHECK:     if (::mlir::succeeded(rewrite_r(rewriter, op, v2)))
+// CHECK:     if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_r(rewriter, op, v2); })))
 // CHECK:       return ::mlir::success();
 // CHECK:     continue;
 // CHECK:   }
@@ -47,12 +47,12 @@ module {
 // CHECK:   for (::mlir::Operation * v2 : v1) {
 // CHECK:     if (v2->getName().getStringRef() != "test.use")
 // CHECK:       continue;
-// CHECK:     if (::mlir::succeeded(rewrite_r(rewriter, op, v2)))
+// CHECK:     if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_r(rewriter, op, v2); })))
 // CHECK:       return ::mlir::success();
 // CHECK:     continue;
 // CHECK:   }
 // CHECK:   if (op->getName().getStringRef() != "test.fallback")
 // CHECK:     return ::mlir::failure();
-// CHECK:   if (::mlir::succeeded(rewrite_r0(rewriter, op)))
+// CHECK:   if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_r0(rewriter, op); })))
 // CHECK:     return ::mlir::success();
 // CHECK:   return ::mlir::failure();

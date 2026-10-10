@@ -23,4 +23,4 @@ module {
 // CHECK:   ::mlir::Value v2 = ::mlir::match::runtime::getSingleValue(::mlir::match::runtime::getOperandGroup(op, 0));
 // CHECK:   if (!v2)
 // CHECK:     return ::mlir::failure();
-// CHECK:   if (::mlir::succeeded(rewrite_r(rewriter, op, v1, v2)))
+// CHECK:   if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_r(rewriter, op, v1, v2); })))

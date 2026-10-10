@@ -34,8 +34,8 @@ module {
 // CHECK: static ::llvm::LogicalResult rewrite_mul_to_add(
 // CHECK: struct GeneratedMatcher_0
 // CHECK-NOT: struct GeneratedMatcher_1
-// CHECK: void populateGeneratedPatterns(::mlir::RewritePatternSet &set) {
-// CHECK-NEXT: set.add<GeneratedMatcher_0>(set.getContext());
+// CHECK: populateGeneratedPatterns(::mlir::RewritePatternSet &set,
+// CHECK: set.add<GeneratedMatcher_0>(set.getContext(), configSet);
 // CHECK: } // namespace ns
 
 // SPLIT-NOT: namespace ns

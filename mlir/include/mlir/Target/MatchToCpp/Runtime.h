@@ -64,6 +64,17 @@ inline Value getSingleValue(std::optional<ValueRange> range) {
   return range ? getSingleValue(*range) : Value();
 }
 
+template <typename Fn>
+LogicalResult applyRewrite(PDLPatternConfigSet *configs,
+                           PatternRewriter &rewriter, Fn &&fn) {
+  if (!configs)
+    return fn();
+  configs->notifyRewriteBegin(rewriter);
+  LogicalResult result = fn();
+  configs->notifyRewriteEnd(rewriter);
+  return result;
+}
+
 template <typename OpT>
 OperationName getOperationName(MLIRContext *context) {
   if (std::optional<RegisteredOperationName> name =

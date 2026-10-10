@@ -22,4 +22,4 @@ module {
 // CHECK:   ::mlir::Value v0 = (0 < op->getNumOperands()) ? op->getOperand(0) : ::mlir::Value();
 // CHECK:   if (!v0)
 // CHECK:     return ::mlir::failure();
-// CHECK:   if (::mlir::succeeded(rewrite_foo(rewriter, op, v0)))
+// CHECK:   if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_foo(rewriter, op, v0); })))

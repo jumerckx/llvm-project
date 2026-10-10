@@ -31,18 +31,20 @@ module {
 }
 
 // CHECK-LABEL: struct GeneratedMatcher_0
-// CHECK: ::mlir::RewritePattern("test.foo", 2, context)
+// CHECK: ::mlir::RewritePattern("test.foo", 2, context),
+// CHECK-NEXT: configSet(::std::move(configSet)) {}
+// CHECK:   ::mlir::PDLPatternConfigSet *configs = configSet.get();
 // CHECK-NOT: deferred
 // CHECK:   auto attempt0 = [&]() -> ::llvm::LogicalResult {
 // CHECK:     if (op->getNumOperands() != 2)
 // CHECK:       return ::mlir::failure();
-// CHECK:     if (::mlir::succeeded(rewrite_a(rewriter, op)))
+// CHECK:     if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_a(rewriter, op); })))
 // CHECK:       return ::mlir::success();
 // CHECK:     return ::mlir::failure();
 // CHECK:   };
 // CHECK:   if (::mlir::succeeded(attempt0())) return ::mlir::success();
 // CHECK:   auto attempt1 = [&]() -> ::llvm::LogicalResult {
-// CHECK:     if (::mlir::succeeded(rewrite_b(rewriter, op)))
+// CHECK:     if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_b(rewriter, op); })))
 // CHECK:       return ::mlir::success();
 // CHECK:     return ::mlir::failure();
 // CHECK:   };
@@ -59,7 +61,7 @@ module {
 // CHECK:         deferredBenefit = 1;
 // CHECK:         deferred = [=, &rewriter]() -> ::llvm::LogicalResult {
 // CHECK:           rewriter.setInsertionPoint(op);
-// CHECK:           return rewrite_b(rewriter, op);
+// CHECK:           return ::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_b(rewriter, op); });
 // CHECK:         };
 // CHECK:       }
 // CHECK:       if (op->getNumResults() != 1)
@@ -71,10 +73,20 @@ module {
 // CHECK:       if (op->getNumOperands() != 2)
 // CHECK:         return ::mlir::failure();
 // CHECK-NOT:   applyDeferred
-// CHECK:       if (::mlir::succeeded(rewrite_a(rewriter, op)))
+// CHECK:       if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_a(rewriter, op); })))
 // CHECK:         return ::mlir::success();
 // CHECK:   if (::mlir::succeeded(match()))
 // CHECK-NEXT:  return ::mlir::success();
 // CHECK-NEXT: if (deferred)
 // CHECK-NEXT:  return applyDeferred();
 // CHECK-NEXT: return ::mlir::failure();
+
+// CHECK-LABEL: template <typename... ConfigsT>
+// CHECK-NEXT: {{\[\[}}maybe_unused]] static void
+// CHECK-NEXT: populateGeneratedPatterns(::mlir::RewritePatternSet &set,
+// CHECK-NEXT:                           ConfigsT &&...configs) {
+// CHECK-NEXT:   ::std::shared_ptr<::mlir::PDLPatternConfigSet> configSet;
+// CHECK-NEXT:   if constexpr (sizeof...(ConfigsT) != 0)
+// CHECK-NEXT:     configSet = ::std::make_shared<::mlir::PDLPatternConfigSet>(
+// CHECK-NEXT:         ::std::forward<ConfigsT>(configs)...);
+// CHECK-NEXT:   set.add<GeneratedMatcher_0, GeneratedMatcher_1>(set.getContext(), configSet);

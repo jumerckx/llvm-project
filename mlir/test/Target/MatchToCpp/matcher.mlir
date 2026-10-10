@@ -25,5 +25,5 @@ module {
 // CHECK:   ::mlir::Value v1 = castedOp0.getOperation()->getOperand(0);
 // CHECK-NOT: if (!v1)
 // CHECK:   rewriter.setInsertionPoint(op);
-// CHECK:   if (::mlir::succeeded(rewrite_addf(rewriter, op, v1)))
+// CHECK:   if (::mlir::succeeded(::mlir::match::runtime::applyRewrite(configs, rewriter, [&] { return rewrite_addf(rewriter, op, v1); })))
 // CHECK:     return ::mlir::success();
