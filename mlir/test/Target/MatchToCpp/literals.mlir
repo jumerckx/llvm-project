@@ -80,4 +80,4 @@ module {
 // CHECK: ::mlir::Type v{{[0-9]+}} = ::mlir::IntegerType::get(op->getContext(), 32);
 // CHECK: ::llvm::SmallVector<::mlir::Type> v{{[0-9]+}}{::mlir::IntegerType::get(op->getContext(), 32), ::mlir::IntegerType::get(op->getContext(), 64)};
 // CHECK: if (!::llvm::equal(v{{[0-9]+}}, v{{[0-9]+}}))
-// CHECK: ::mlir::PDLValue {{.*}}[] = {v{{[0-9]+}}, v{{[0-9]+}}};
+// CHECK: ::mlir::match::runtime::callNative(native_cPDLFn, rewriter, ::std::tie(), v{{[0-9]+}}, v{{[0-9]+}})

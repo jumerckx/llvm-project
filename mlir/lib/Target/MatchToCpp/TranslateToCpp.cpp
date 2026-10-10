@@ -12,12 +12,15 @@
 #include "mlir/Dialect/Match/IR/MatchOps.h"
 #include "mlir/Dialect/Match/IR/MatchTypes.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
+#include "mlir/Dialect/PDL/IR/PDLOps.h"
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/SymbolTable.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -29,13 +32,22 @@
 using namespace mlir;
 using namespace mlir::match;
 
+static std::string sanitizeIdentifier(StringRef name) {
+  std::string result;
+  for (char c : name)
+    result.push_back(llvm::isAlnum(c) ? c : '_');
+  return result;
+}
+
+static bool isRangeType(Type type) { return isa<pdl::RangeType>(type); }
+
 namespace {
 class MatcherCppEmitter {
 public:
   MatcherCppEmitter(raw_ostream &os, const OpInfoRegistry &registry)
       : os(os), registry(registry) {}
 
-  LogicalResult emitModule(Operation *root);
+  LogicalResult emitModule(Operation *root, StringRef cppNamespace);
 
 private:
   std::string getName(Value v) {
@@ -52,8 +64,16 @@ private:
   std::string freshId(StringRef prefix) {
     return (prefix + Twine(counter++)).str();
   }
+  void resetState() {
+    names.clear();
+    concrete.clear();
+    knownNonNull.clear();
+    locOps.clear();
+    counter = 0;
+  }
 
   std::string cppType(Type t);
+  std::string cppStorageType(Type t);
   std::string typeLiteral(Type t);
   std::string attrLiteral(Attribute a);
   void emitTypeLiterals(ArrayAttr types);
@@ -61,6 +81,8 @@ private:
   raw_ostream &indent() { return os.indent(indentLevel * 2); }
 
   LogicalResult emitMatcher(MatcherOp matcher, unsigned idx);
+  LogicalResult emitRewriter(RewriterOp rewriter, StringRef fnName);
+  LogicalResult emitRewriterOp(Operation *op);
 
   LogicalResult emitOpSequence(ArrayRef<Operation *> ops, StringRef failAction);
 
@@ -73,7 +95,13 @@ private:
   LogicalResult emitForEach(ForEachOp op);
   LogicalResult emitSwitchOpName(SwitchOpNameOp op, StringRef failAction);
   LogicalResult emitSwitchType(SwitchTypeOp op, StringRef failAction);
-  LogicalResult emitSuccess(SuccessOp op, StringRef failAction);
+  LogicalResult emitSuccess(SuccessOp op);
+  LogicalResult emitNativeCall(Operation *op, StringRef name, ValueRange args,
+                               ValueRange results, StringRef failCondition,
+                               StringRef failAction);
+  void emitGetValues(Value opVal, std::optional<unsigned> index, Value result,
+                     bool operands, bool optional);
+  std::string locExpr();
 
   static SmallVector<Operation *> opsOf(Region &region) {
     SmallVector<Operation *> ops;
@@ -92,15 +120,35 @@ private:
     return it == concrete.end() ? nullptr : &it->second;
   }
 
+  struct Scope {
+    Scope(MatcherCppEmitter &emitter)
+        : emitter(emitter), numLocOps(emitter.locOps.size()),
+          concrete(emitter.concrete) {}
+    ~Scope() {
+      emitter.locOps.resize(numLocOps);
+      emitter.concrete = std::move(concrete);
+    }
+    MatcherCppEmitter &emitter;
+    size_t numLocOps;
+    DenseMap<Value, ConcreteBinding> concrete;
+  };
+
   raw_ostream &os;
   const OpInfoRegistry &registry;
   DenseMap<Value, std::string> names;
   DenseMap<Value, ConcreteBinding> concrete;
   DenseSet<Value> knownNonNull;
+  SmallVector<Value> locOps;
   unsigned counter = 0;
   unsigned indentLevel = 0;
-  bool needsGroupHelper = false;
+  std::string ctxExpr = "op->getContext()";
+  Value rootValue;
+  StringRef rootKind;
+  DenseMap<Operation *, uint64_t> reachableBenefit;
+  bool anyDeferred = false;
+  uint64_t maxDeferredBenefit = 0;
   std::map<std::string, std::string> rewriterDecls;
+  llvm::MapVector<Operation *, std::string> generatedRewriters;
   SmallVector<std::string> structNames;
 };
 
@@ -129,11 +177,22 @@ std::string MatcherCppEmitter::cppType(Type t) {
   return "auto";
 }
 
+std::string MatcherCppEmitter::cppStorageType(Type t) {
+  if (auto r = dyn_cast<pdl::RangeType>(t)) {
+    Type el = r.getElementType();
+    if (isa<pdl::ValueType>(el))
+      return "::llvm::SmallVector<::mlir::Value>";
+    if (isa<pdl::TypeType>(el))
+      return "::llvm::SmallVector<::mlir::Type>";
+  }
+  return cppType(t);
+}
+
 std::string MatcherCppEmitter::typeLiteral(Type t) {
   if (auto it = dyn_cast<IntegerType>(t)) {
     std::string str;
     llvm::raw_string_ostream ss(str);
-    ss << "::mlir::IntegerType::get(op->getContext(), " << it.getWidth();
+    ss << "::mlir::IntegerType::get(" << ctxExpr << ", " << it.getWidth();
     if (it.isSigned())
       ss << ", ::mlir::IntegerType::Signed";
     else if (it.isUnsigned())
@@ -142,21 +201,23 @@ std::string MatcherCppEmitter::typeLiteral(Type t) {
     return str;
   }
   if (isa<IndexType>(t))
-    return "::mlir::IndexType::get(op->getContext())";
+    return "::mlir::IndexType::get(" + ctxExpr + ")";
   if (isa<BFloat16Type>(t))
-    return "::mlir::BFloat16Type::get(op->getContext())";
+    return "::mlir::BFloat16Type::get(" + ctxExpr + ")";
   if (isa<Float16Type>(t))
-    return "::mlir::Float16Type::get(op->getContext())";
+    return "::mlir::Float16Type::get(" + ctxExpr + ")";
   if (isa<Float32Type>(t))
-    return "::mlir::Float32Type::get(op->getContext())";
+    return "::mlir::Float32Type::get(" + ctxExpr + ")";
   if (isa<Float64Type>(t))
-    return "::mlir::Float64Type::get(op->getContext())";
+    return "::mlir::Float64Type::get(" + ctxExpr + ")";
 
   std::string str;
   llvm::raw_string_ostream ss(str);
   t.print(ss);
-  return ("::mlir::parseType(\"" + StringRef(ss.str()) +
-          "\", op->getContext())")
+  std::string escaped;
+  llvm::raw_string_ostream es(escaped);
+  llvm::printEscapedString(str, es);
+  return ("::mlir::parseType(\"" + StringRef(escaped) + "\", " + ctxExpr + ")")
       .str();
 }
 
@@ -190,7 +251,7 @@ std::string MatcherCppEmitter::attrLiteral(Attribute a) {
     if (isa<NoneType>(sa.getType())) {
       std::string str;
       llvm::raw_string_ostream ss(str);
-      ss << "::mlir::StringAttr::get(op->getContext(), \"";
+      ss << "::mlir::StringAttr::get(" << ctxExpr << ", \"";
       llvm::printEscapedString(sa.getValue(), ss);
       ss << "\")";
       return str;
@@ -200,13 +261,16 @@ std::string MatcherCppEmitter::attrLiteral(Attribute a) {
     return (Twine("::mlir::TypeAttr::get(") + typeLiteral(ta.getValue()) + ")")
         .str();
   if (isa<UnitAttr>(a))
-    return "::mlir::UnitAttr::get(op->getContext())";
+    return "::mlir::UnitAttr::get(" + ctxExpr + ")";
 
   std::string str;
   llvm::raw_string_ostream ss(str);
   a.print(ss);
-  return ("::mlir::parseAttribute(\"" + StringRef(ss.str()) +
-          "\", op->getContext())")
+  std::string escaped;
+  llvm::raw_string_ostream es(escaped);
+  llvm::printEscapedString(str, es);
+  return ("::mlir::parseAttribute(\"" + StringRef(escaped) + "\", " + ctxExpr +
+          ")")
       .str();
 }
 
@@ -234,35 +298,77 @@ void MatcherCppEmitter::bindConcrete(Value op, const OpInfo &info,
   concrete[op] = ConcreteBinding{&info, casted};
 }
 
-LogicalResult MatcherCppEmitter::emitSuccess(SuccessOp op,
-                                             StringRef failAction) {
-  StringRef leaf = op.getRewriter().getLeafReference().getValue();
-  std::string fnName = ("rewrite_" + leaf).str();
+std::string MatcherCppEmitter::locExpr() {
+  if (locOps.size() == 1)
+    return getName(locOps.front()) + "->getLoc()";
+  std::string str;
+  llvm::raw_string_ostream ss(str);
+  ss << "rewriter.getFusedLoc({";
+  llvm::interleaveComma(locOps, ss,
+                        [&](Value v) { ss << getName(v) << "->getLoc()"; });
+  ss << "})";
+  return str;
+}
 
-  std::string decl;
-  {
+LogicalResult MatcherCppEmitter::emitSuccess(SuccessOp op) {
+  StringRef leaf = op.getRewriter().getLeafReference().getValue();
+  std::string fnName = "rewrite_" + sanitizeIdentifier(leaf);
+
+  auto rewriterOp = dyn_cast_or_null<RewriterOp>(
+      SymbolTable::lookupNearestSymbolFrom(op, op.getRewriter()));
+  if (rewriterOp) {
+    unsigned numArgs = rewriterOp.getBody().getNumArguments();
+    if (numArgs != op.getInputs().size())
+      return op.emitError("rewriter @")
+             << leaf << " expects " << numArgs
+             << " inputs, but the success provides " << op.getInputs().size();
+    generatedRewriters.insert({rewriterOp, fnName});
+  } else {
+    std::string decl;
     llvm::raw_string_ostream ds(decl);
     ds << "::llvm::LogicalResult " << fnName
        << "(::mlir::PatternRewriter &rewriter";
     for (Value in : op.getInputs())
       ds << ", " << cppType(in.getType());
     ds << ");";
+    rewriterDecls[fnName] = decl;
   }
-  rewriterDecls[fnName] = decl;
 
-  indent() << "// match.success @" << leaf << " benefit(" << op.getBenefit()
-           << ")\n";
+  std::string call;
+  {
+    llvm::raw_string_ostream cs(call);
+    cs << fnName << "(rewriter";
+    if (rewriterOp)
+      cs << ", " << locExpr();
+    for (Value in : op.getInputs())
+      cs << ", " << getName(in);
+    cs << ")";
+  }
+
+  uint64_t benefit = op.getBenefit();
+  indent() << "// match.success @" << leaf << " benefit(" << benefit << ")\n";
+  if (benefit < reachableBenefit.lookup(op)) {
+    indent() << "if (!deferred || deferredBenefit < " << benefit << ") {\n";
+    indent() << "  deferredBenefit = " << benefit << ";\n";
+    indent() << "  deferred = [=, &rewriter]() -> ::llvm::LogicalResult {\n";
+    indent() << "    rewriter.setInsertionPoint(op);\n";
+    indent() << "    return " << call << ";\n";
+    indent() << "  };\n";
+    indent() << "}\n";
+    return success();
+  }
+  if (anyDeferred && maxDeferredBenefit >= benefit) {
+    indent() << "if (deferred && deferredBenefit >= " << benefit << ")\n";
+    indent() << "  return applyDeferred();\n";
+  }
   indent() << "rewriter.setInsertionPoint(op);\n";
-  indent() << "if (::mlir::succeeded(" << fnName << "(rewriter";
-  for (Value in : op.getInputs())
-    os << ", " << getName(in);
-  os << ")))\n";
+  indent() << "if (::mlir::succeeded(" << call << "))\n";
   indent() << "  return ::mlir::success();\n";
-  indent() << failAction << "\n";
   return success();
 }
 
 LogicalResult MatcherCppEmitter::emitTry(TryOp op) {
+  Scope scope(*this);
   std::string fn = freshId("attempt");
   indent() << "auto " << fn << " = [&]() -> ::llvm::LogicalResult {\n";
   ++indentLevel;
@@ -276,7 +382,10 @@ LogicalResult MatcherCppEmitter::emitTry(TryOp op) {
 }
 
 LogicalResult MatcherCppEmitter::emitForEach(ForEachOp op) {
+  Scope scope(*this);
   std::string elem = declareName(op.getLoopVariable());
+  if (isa<pdl::OperationType>(op.getLoopVariable().getType()))
+    locOps.push_back(op.getLoopVariable());
   indent() << "for (" << cppType(op.getLoopVariable().getType()) << " " << elem
            << " : " << getName(op.getRange()) << ") {\n";
   ++indentLevel;
@@ -306,6 +415,7 @@ LogicalResult MatcherCppEmitter::emitSwitchOpName(SwitchOpNameOp op,
              << "->getName().getStringRef();\n";
   }
   for (auto [j, region] : llvm::enumerate(op.getCaseRegions())) {
+    Scope scope(*this);
     auto caseName = cast<StringAttr>(cases[j]).getValue();
     indent() << (j == 0 ? "if" : "else if") << " (";
     if (const OpInfo *info = caseInfos[j])
@@ -315,25 +425,10 @@ LogicalResult MatcherCppEmitter::emitSwitchOpName(SwitchOpNameOp op,
       os << nameVar << " == \"" << caseName << "\"";
     os << ") {\n";
     ++indentLevel;
-    bool bound = false;
-    bool hadPrev = false;
-    ConcreteBinding saved{};
-    if (auto prev = concrete.find(op.getOp()); prev != concrete.end()) {
-      hadPrev = true;
-      saved = prev->second;
-    }
-    if (const OpInfo *info = caseInfos[j]) {
+    if (const OpInfo *info = caseInfos[j])
       bindConcrete(op.getOp(), *info, /*alreadyKnownName=*/true, failAction);
-      bound = true;
-    }
     if (failed(emitOpSequence(opsOf(region), failAction)))
       return failure();
-    if (bound) {
-      if (hadPrev)
-        concrete[op.getOp()] = saved;
-      else
-        concrete.erase(op.getOp());
-    }
     --indentLevel;
     indent() << "}\n";
   }
@@ -351,6 +446,7 @@ LogicalResult MatcherCppEmitter::emitSwitchType(SwitchTypeOp op,
            << ";\n";
   ArrayAttr cases = op.getCaseTypes();
   for (auto [j, region] : llvm::enumerate(op.getCaseRegions())) {
+    Scope scope(*this);
     Type caseType = cast<TypeAttr>(cases[j]).getValue();
     indent() << (j == 0 ? "if" : "else if") << " (" << tyVar
              << " == " << typeLiteral(caseType) << ") {\n";
@@ -363,6 +459,104 @@ LogicalResult MatcherCppEmitter::emitSwitchType(SwitchTypeOp op,
   --indentLevel;
   indent() << "}\n";
   return success();
+}
+
+LogicalResult MatcherCppEmitter::emitNativeCall(Operation *op, StringRef name,
+                                                ValueRange args,
+                                                ValueRange results,
+                                                StringRef failCondition,
+                                                StringRef failAction) {
+  for (Value result : results) {
+    if (isRangeType(result.getType()) &&
+        isa<pdl::OperationType>(
+            cast<pdl::RangeType>(result.getType()).getElementType()))
+      return op->emitError("operation range results of native functions are "
+                           "not supported by the C++ emitter");
+    std::string v = declareName(result);
+    indent() << cppStorageType(result.getType()) << " " << v << ";\n";
+  }
+  indent() << "if (" << failCondition << "(::mlir::match::runtime::callNative("
+           << name << "PDLFn, rewriter, ::std::tie(";
+  llvm::interleaveComma(results, os, [&](Value v) { os << getName(v); });
+  os << ")";
+  for (Value arg : args)
+    os << ", " << getName(arg);
+  os << ")))\n";
+  indent() << "  " << failAction << "\n";
+  return success();
+}
+
+void MatcherCppEmitter::emitGetValues(Value opVal,
+                                      std::optional<unsigned> index,
+                                      Value result, bool operands,
+                                      bool optional) {
+  Type type = result.getType();
+  if (auto opt = dyn_cast<OptionalType>(type))
+    type = opt.getInnerType();
+  bool range = isRangeType(type);
+  std::string opn = getName(opVal);
+  std::string v = declareName(result);
+  StringRef kind = operands ? "Operand" : "Result";
+  StringRef all = operands ? "getOperands()" : "getResults()";
+
+  if (const ConcreteBinding *b = concreteOf(opVal)) {
+    const OpInfo &info = *b->info;
+    std::optional<unsigned> fixed =
+        operands ? info.getFixedNumOperands() : info.getFixedNumResults();
+    unsigned numGroups =
+        operands ? info.numOperandGroups : info.numResultGroups;
+    if (!index) {
+      if (range) {
+        indent() << "auto " << v << " = " << b->var << ".getOperation()->"
+                 << all << ";\n";
+        knownNonNull.insert(result);
+        return;
+      }
+    } else if (fixed && *index < *fixed && !range) {
+      indent() << "::mlir::Value " << v << " = " << b->var
+               << ".getOperation()->get" << kind << "(" << *index << ");\n";
+      knownNonNull.insert(result);
+      return;
+    } else if (*index < numGroups) {
+      if (range) {
+        indent() << "auto " << v << " = " << b->var << ".getODS" << kind << "s("
+                 << *index << ");\n";
+        knownNonNull.insert(result);
+      } else {
+        indent() << "::mlir::Value " << v
+                 << " = ::mlir::match::runtime::getSingleValue(" << b->var
+                 << ".getODS" << kind << "s(" << *index << "));\n";
+      }
+      return;
+    }
+  }
+
+  if (!index) {
+    if (range) {
+      indent() << "::mlir::ValueRange " << v << " = " << opn << "->" << all
+               << ";\n";
+      knownNonNull.insert(result);
+    } else {
+      indent() << "::mlir::Value " << v
+               << " = ::mlir::match::runtime::getSingleValue(" << opn << "->"
+               << all << ");\n";
+    }
+    return;
+  }
+
+  std::string group = ("::mlir::match::runtime::get" + kind + "Group(" + opn +
+                       ", " + Twine(*index) + ")")
+                          .str();
+  if (!range) {
+    indent() << "::mlir::Value " << v
+             << " = ::mlir::match::runtime::getSingleValue(" << group << ");\n";
+  } else if (optional) {
+    indent() << "::std::optional<::mlir::ValueRange> " << v << " = " << group
+             << ";\n";
+  } else {
+    indent() << "::mlir::ValueRange " << v << " = " << group
+             << ".value_or(::mlir::ValueRange());\n";
+  }
 }
 
 LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
@@ -379,7 +573,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
           [&](SwitchOpNameOp o) { return emitSwitchOpName(o, failAction); })
       .Case<SwitchTypeOp>(
           [&](SwitchTypeOp o) { return emitSwitchType(o, failAction); })
-      .Case<SuccessOp>([&](SuccessOp o) { return emitSuccess(o, failAction); })
+      .Case<SuccessOp>([&](SuccessOp o) { return emitSuccess(o); })
       .Case<ConstantAttributeOp>([&](ConstantAttributeOp o) {
         std::string v = declareName(o.getResult());
         indent() << "::mlir::Attribute " << v << " = "
@@ -435,76 +629,32 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
         return success();
       })
       .Case<GetOperandsOp>([&](GetOperandsOp o) {
-        std::string opn = getName(o.getOp());
-        std::string v = declareName(o.getResult());
-        if (const ConcreteBinding *b = concreteOf(o.getOp())) {
-          if (o.getIndex() && *o.getIndex() < b->info->numOperandGroups) {
-            indent() << "auto " << v << " = " << b->var << ".getODSOperands("
-                     << *o.getIndex() << ");\n";
-            knownNonNull.insert(o.getResult());
-            return success();
-          }
-          if (!o.getIndex()) {
-            indent() << "auto " << v << " = " << b->var
-                     << ".getOperation()->getOperands();\n";
-            knownNonNull.insert(o.getResult());
-            return success();
-          }
-        }
-        if (o.getIndex()) {
-          needsGroupHelper = true;
-          indent() << "::std::optional<::mlir::ValueRange> " << v
-                   << " = __pdl_get_group(" << opn << ", " << *o.getIndex()
-                   << ", ::mlir::ValueRange(" << opn
-                   << "->getOperands()), \"operandSegmentSizes\", " << opn
-                   << "->hasTrait<::mlir::OpTrait::AttrSizedOperandSegments>()"
-                      ");\n";
-        } else {
-          indent() << "::std::optional<::mlir::ValueRange> " << v
-                   << " = ::mlir::ValueRange(" << opn << "->getOperands());\n";
-        }
+        emitGetValues(o.getOp(), o.getIndex(), o.getResult(),
+                      /*operands=*/true, /*optional=*/true);
         return success();
       })
       .Case<GetResultsOp>([&](GetResultsOp o) {
-        std::string opn = getName(o.getOp());
-        std::string v = declareName(o.getResult());
-        if (const ConcreteBinding *b = concreteOf(o.getOp())) {
-          if (o.getIndex() && *o.getIndex() < b->info->numResultGroups) {
-            indent() << "auto " << v << " = " << b->var << ".getODSResults("
-                     << *o.getIndex() << ");\n";
-            knownNonNull.insert(o.getResult());
-            return success();
-          }
-          if (!o.getIndex()) {
-            indent() << "auto " << v << " = " << b->var
-                     << ".getOperation()->getResults();\n";
-            knownNonNull.insert(o.getResult());
-            return success();
-          }
-        }
-        if (o.getIndex()) {
-          needsGroupHelper = true;
-          indent() << "::std::optional<::mlir::ValueRange> " << v
-                   << " = __pdl_get_group(" << opn << ", " << *o.getIndex()
-                   << ", ::mlir::ValueRange(" << opn
-                   << "->getResults()), \"resultSegmentSizes\", " << opn
-                   << "->hasTrait<::mlir::OpTrait::AttrSizedResultSegments>()"
-                      ");\n";
-        } else {
-          indent() << "::std::optional<::mlir::ValueRange> " << v
-                   << " = ::mlir::ValueRange(" << opn << "->getResults());\n";
-        }
+        emitGetValues(o.getOp(), o.getIndex(), o.getResult(),
+                      /*operands=*/false, /*optional=*/true);
         return success();
       })
       .Case<GetAttributeOp>([&](GetAttributeOp o) {
         std::string v = declareName(o.getResult());
+        if (const ConcreteBinding *b = concreteOf(o.getOp())) {
+          if (const std::string *getter =
+                  b->info->lookupAttrGetter(o.getName())) {
+            indent() << "::mlir::Attribute " << v << " = " << b->var << "."
+                     << *getter << "Attr();\n";
+            return success();
+          }
+        }
         indent() << "::mlir::Attribute " << v << " = " << getName(o.getOp())
                  << "->getAttr(\"" << o.getName() << "\");\n";
         return success();
       })
       .Case<GetDefiningOpOp>([&](GetDefiningOpOp o) {
         std::string v = declareName(o.getResult());
-        if (isa<pdl::RangeType>(o.getValue().getType())) {
+        if (isRangeType(o.getValue().getType())) {
           std::string r = getName(o.getValue());
           indent() << "::mlir::Operation *" << v << " = " << r
                    << ".empty() ? nullptr : (*" << r
@@ -517,9 +667,9 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
       })
       .Case<GetValueTypeOp>([&](GetValueTypeOp o) {
         std::string v = declareName(o.getResult());
-        if (isa<pdl::RangeType>(o.getValue().getType()))
-          indent() << "auto " << v << " = " << getName(o.getValue())
-                   << ".getTypes();\n";
+        if (isRangeType(o.getValue().getType()))
+          indent() << "::mlir::TypeRange " << v << " = ::mlir::ValueRange("
+                   << getName(o.getValue()) << ").getTypes();\n";
         else
           indent() << "::mlir::Type " << v << " = " << getName(o.getValue())
                    << ".getType();\n";
@@ -555,13 +705,15 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
       })
       .Case<IsNotNullOp>([&](IsNotNullOp o) {
         std::string name = getName(o.getOptionalValue());
+        if (isa<pdl::OperationType>(o.getUnwrapped().getType()))
+          locOps.push_back(o.getUnwrapped());
         if (knownNonNull.contains(o.getOptionalValue())) {
           mapName(o.getUnwrapped(), name);
           return success();
         }
         Type inner =
             cast<OptionalType>(o.getOptionalValue().getType()).getInnerType();
-        if (isa<pdl::RangeType>(inner)) {
+        if (isRangeType(inner)) {
           fail("!" + name);
           std::string u = declareName(o.getUnwrapped());
           indent() << cppType(inner) << " " << u << " = *" << name << ";\n";
@@ -572,17 +724,20 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
         return success();
       })
       .Case<HasNameOp>([&](HasNameOp o) {
+        bool isRootKind = o.getOp() == rootValue && o.getName() == rootKind;
         if (const OpInfo *info = registry.lookup(o.getName())) {
-          bindConcrete(o.getOp(), *info, /*alreadyKnownName=*/false,
+          bindConcrete(o.getOp(), *info, /*alreadyKnownName=*/isRootKind,
                        failAction);
           return success();
         }
+        if (isRootKind)
+          return success();
         fail(getName(o.getOp()) + "->getName().getStringRef() != \"" +
              o.getName().str() + "\"");
         return success();
       })
       .Case<EqualOp>([&](EqualOp o) {
-        if (isa<pdl::RangeType>(o.getLhs().getType()))
+        if (isRangeType(o.getLhs().getType()))
           fail("!::llvm::equal(" + getName(o.getLhs()) + ", " +
                getName(o.getRhs()) + ")");
         else
@@ -634,35 +789,11 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
              (o.getAtLeast() ? "< " : "!= ") + Twine(o.getCount()));
         return success();
       })
-      .Case<ApplyNativeConstraintOp>([&](ApplyNativeConstraintOp o)
-                                         -> LogicalResult {
-        if (!o.getConstraintResults().empty())
-          return o.emitError("result-producing native constraints are not yet "
-                             "supported by the C++ matcher emitter");
-        for (Value arg : o.getArgs())
-          if (isa<pdl::RangeType>(arg.getType()))
-            return o.emitError("range arguments to native constraints are not "
-                               "yet supported by the C++ matcher emitter");
-        std::string argsVar = freshId("cargs");
-        indent() << "{\n";
-        ++indentLevel;
-        indent() << "::mlir::PDLValue " << argsVar << "[] = {";
-        llvm::interleaveComma(o.getArgs(), os,
-                              [&](Value v) { os << getName(v); });
-        os << "};\n";
-        indent() << "::mlir::PDLResultList " << argsVar << "Res(0);\n";
-        indent() << "if ("
-                 << (o.getIsNegated() ? "::mlir::succeeded" : "::mlir::failed")
-                 << "(" << o.getName() << "(rewriter, " << argsVar << "Res, "
-                 << argsVar << ")))\n";
-        indent() << "  " << failAction << "\n";
-        --indentLevel;
-        indent() << "}\n";
-        rewriterDecls[o.getName().str()] =
-            "::llvm::LogicalResult " + o.getName().str() +
-            "(::mlir::PatternRewriter &, ::mlir::PDLResultList &, "
-            "::llvm::ArrayRef<::mlir::PDLValue>);";
-        return success();
+      .Case<ApplyNativeConstraintOp>([&](ApplyNativeConstraintOp o) {
+        return emitNativeCall(
+            o, o.getName(), o.getArgs(), o.getConstraintResults(),
+            o.getIsNegated() ? "::mlir::succeeded" : "::mlir::failed",
+            failAction);
       })
       .Default([&](Operation *o) {
         return o->emitError("unsupported match op in C++ matcher emitter");
@@ -674,26 +805,59 @@ LogicalResult MatcherCppEmitter::emitOpSequence(ArrayRef<Operation *> ops,
   for (Operation *op : ops)
     if (failed(emitSingle(op, failAction)))
       return failure();
-
-  if (!ops.empty() && isa<SuccessOp>(ops.back()))
-    return success();
   indent() << failAction << "\n";
   return success();
 }
 
 LogicalResult MatcherCppEmitter::emitMatcher(MatcherOp matcher, unsigned idx) {
-  names.clear();
-  concrete.clear();
-  knownNonNull.clear();
-  counter = 0;
+  resetState();
+  ctxExpr = "op->getContext()";
 
   Block &body = matcher.getBodyRegion().front();
-  mapName(body.getArgument(0), "op");
+  rootValue = body.getArgument(0);
+  mapName(rootValue, "op");
+  locOps.push_back(rootValue);
 
-  uint64_t benefit = 1;
-  matcher.walk([&](SuccessOp s) {
-    benefit = std::max<uint64_t>(benefit, s.getBenefit());
+  rootKind = StringRef();
+  for (Operation &op : body) {
+    if (isa<SuccessOp>(op) || op.getNumRegions())
+      break;
+    if (auto hasName = dyn_cast<HasNameOp>(op))
+      if (hasName.getOp() == rootValue)
+        rootKind = hasName.getName();
+  }
+
+  SmallVector<SuccessOp> successes;
+  matcher.walk<WalkOrder::PreOrder>(
+      [&](SuccessOp s) { successes.push_back(s); });
+  DenseMap<Operation *, uint64_t> loopBenefit;
+  matcher.walk([&](ForEachOp loop) {
+    uint64_t benefit = 0;
+    loop.walk([&](SuccessOp s) {
+      benefit = std::max<uint64_t>(benefit, s.getBenefit());
+    });
+    loopBenefit[loop] = benefit;
   });
+  uint64_t maxBenefit = 1;
+  uint64_t laterBenefit = 0;
+  reachableBenefit.clear();
+  anyDeferred = false;
+  maxDeferredBenefit = 0;
+  for (SuccessOp s : llvm::reverse(successes)) {
+    uint64_t reachable = laterBenefit;
+    for (Operation *parent = s->getParentOp(); parent != matcher;
+         parent = parent->getParentOp())
+      if (isa<ForEachOp>(parent))
+        reachable = std::max(reachable, loopBenefit.lookup(parent));
+    reachableBenefit[s] = reachable;
+    laterBenefit = std::max<uint64_t>(laterBenefit, s.getBenefit());
+    maxBenefit = std::max<uint64_t>(maxBenefit, s.getBenefit());
+    if (s.getBenefit() < reachable) {
+      anyDeferred = true;
+      maxDeferredBenefit =
+          std::max<uint64_t>(maxDeferredBenefit, s.getBenefit());
+    }
+  }
 
   std::string structName = ("GeneratedMatcher_" + Twine(idx)).str();
   structNames.push_back(structName);
@@ -701,16 +865,40 @@ LogicalResult MatcherCppEmitter::emitMatcher(MatcherOp matcher, unsigned idx) {
   os << "namespace {\n";
   os << "struct " << structName << " : public ::mlir::RewritePattern {\n";
   os << "  " << structName << "(::mlir::MLIRContext *context)\n";
-  os << "      : ::mlir::RewritePattern(::mlir::Pattern::MatchAnyOpTypeTag(), "
-     << benefit << ", context) {}\n";
+  os << "      : ::mlir::RewritePattern(";
+  if (rootKind.empty())
+    os << "::mlir::Pattern::MatchAnyOpTypeTag()";
+  else
+    os << "\"" << rootKind << "\"";
+  os << ", " << maxBenefit << ", context) {}\n";
   os << "  ::llvm::LogicalResult\n";
   os << "  matchAndRewrite(::mlir::Operation *op,\n";
   os << "                  ::mlir::PatternRewriter &rewriter) const override "
         "{\n";
   indentLevel = 2;
+  if (anyDeferred) {
+    indent() << "unsigned deferredBenefit = 0;\n";
+    indent() << "::llvm::unique_function<::llvm::LogicalResult()> deferred;\n";
+    indent() << "auto applyDeferred = [&]() -> ::llvm::LogicalResult {\n";
+    indent() << "  auto fn = std::move(deferred);\n";
+    indent() << "  deferred = nullptr;\n";
+    indent() << "  return fn();\n";
+    indent() << "};\n";
+    indent() << "auto match = [&]() -> ::llvm::LogicalResult {\n";
+    ++indentLevel;
+  }
   if (failed(emitOpSequence(opsOf(matcher.getBodyRegion()),
                             "return ::mlir::failure();")))
     return failure();
+  if (anyDeferred) {
+    --indentLevel;
+    indent() << "};\n";
+    indent() << "if (::mlir::succeeded(match()))\n";
+    indent() << "  return ::mlir::success();\n";
+    indent() << "if (deferred)\n";
+    indent() << "  return applyDeferred();\n";
+    indent() << "return ::mlir::failure();\n";
+  }
   indentLevel = 0;
   os << "  }\n";
   os << "};\n";
@@ -718,11 +906,205 @@ LogicalResult MatcherCppEmitter::emitMatcher(MatcherOp matcher, unsigned idx) {
   return success();
 }
 
-LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
+LogicalResult MatcherCppEmitter::emitRewriterOp(Operation *op) {
+  return llvm::TypeSwitch<Operation *, LogicalResult>(op)
+      .Case([&](ConstantAttributeOp o) {
+        std::string v = declareName(o.getResult());
+        indent() << "::mlir::Attribute " << v << " = "
+                 << attrLiteral(o.getValue()) << ";\n";
+        knownNonNull.insert(o.getResult());
+        return success();
+      })
+      .Case([&](ConstantTypeOp o) {
+        std::string v = declareName(o.getResult());
+        indent() << "::mlir::Type " << v << " = " << typeLiteral(o.getValue())
+                 << ";\n";
+        return success();
+      })
+      .Case([&](ConstantTypesOp o) {
+        std::string v = declareName(o.getResult());
+        indent() << "::llvm::SmallVector<::mlir::Type> " << v << "{";
+        emitTypeLiterals(o.getValue());
+        os << "};\n";
+        return success();
+      })
+      .Case([&](ApplyNativeRewriteOp o) {
+        return emitNativeCall(o, o.getName(), o.getArgs(), o.getResults(),
+                              "::mlir::failed", "return ::mlir::failure();");
+      })
+      .Case([&](CreateOperationOp o) -> LogicalResult {
+        const OpInfo *info = registry.lookup(o.getName());
+        std::string state = freshId("state");
+        indent() << "::mlir::OperationState " << state << "(loc, ";
+        if (info)
+          os << "::mlir::match::runtime::getOperationName<"
+             << info->cppClassName << ">(rewriter.getContext())";
+        else
+          os << "\"" << o.getName() << "\"";
+        os << ");\n";
+        for (Value operand : o.getInputOperands()) {
+          if (isRangeType(operand.getType()))
+            indent() << state << ".addOperands(" << getName(operand) << ");\n";
+          else
+            indent() << state << ".operands.push_back(" << getName(operand)
+                     << ");\n";
+        }
+        for (auto [nameAttr, attr] :
+             llvm::zip(o.getInputAttributeNames(), o.getInputAttributes())) {
+          StringRef attrName = cast<StringAttr>(nameAttr).getValue();
+          std::string nameExpr;
+          if (const std::string *getter =
+                  info ? info->lookupAttrGetter(attrName) : nullptr)
+            nameExpr = (info->cppClassName + "::" + *getter + "AttrName(" +
+                        state + ".name)");
+          else
+            nameExpr = ("rewriter.getStringAttr(\"" + attrName + "\")").str();
+          std::string attrVar = getName(attr);
+          if (knownNonNull.contains(attr)) {
+            indent() << state << ".addAttribute(" << nameExpr << ", " << attrVar
+                     << ");\n";
+          } else {
+            indent() << "if (" << attrVar << ")\n";
+            indent() << "  " << state << ".addAttribute(" << nameExpr << ", "
+                     << attrVar << ");\n";
+          }
+        }
+        if (o.getInferredResultTypes()) {
+          indent() << "if (::mlir::failed(";
+          if (info && info->inferResultTypes)
+            os << info->cppClassName
+               << "::inferReturnTypes(rewriter.getContext(), " << state
+               << ".location, " << state << ".operands, " << state
+               << ".attributes.getDictionary(rewriter.getContext()), " << state
+               << ".getRawProperties(), " << state << ".regions, " << state
+               << ".types)";
+          else
+            os << "::mlir::match::runtime::inferResultTypes(" << state << ")";
+          os << "))\n";
+          indent() << "  return ::mlir::failure();\n";
+        } else {
+          for (Value type : o.getInputResultTypes()) {
+            if (isRangeType(type.getType()))
+              indent() << state << ".addTypes(" << getName(type) << ");\n";
+            else
+              indent() << state << ".types.push_back(" << getName(type)
+                       << ");\n";
+          }
+        }
+        std::string v = declareName(o.getResultOp());
+        indent() << "::mlir::Operation *" << v << " = rewriter.create(" << state
+                 << ");\n";
+        if (info)
+          bindConcrete(o.getResultOp(), *info, /*alreadyKnownName=*/true, "");
+        return success();
+      })
+      .Case([&](pdl::ResultOp o) {
+        std::string opName = getName(o.getParent());
+        std::string v = declareName(o.getVal());
+        indent() << "::mlir::Value " << v << " = " << opName << "->getResult("
+                 << o.getIndex() << ");\n";
+        return success();
+      })
+      .Case([&](pdl::ResultsOp o) {
+        emitGetValues(o.getParent(), o.getIndex(), o.getVal(),
+                      /*operands=*/false, /*optional=*/false);
+        return success();
+      })
+      .Case([&](GetValueTypeOp o) {
+        std::string v = declareName(o.getResult());
+        if (isRangeType(o.getValue().getType()))
+          indent() << "::mlir::TypeRange " << v << " = ::mlir::ValueRange("
+                   << getName(o.getValue()) << ").getTypes();\n";
+        else
+          indent() << "::mlir::Type " << v << " = " << getName(o.getValue())
+                   << ".getType();\n";
+        return success();
+      })
+      .Case([&](CreateRangeOp o) {
+        std::string v = declareName(o.getResult());
+        indent() << cppStorageType(o.getResult().getType()) << " " << v
+                 << ";\n";
+        for (Value arg : o.getArguments()) {
+          if (isRangeType(arg.getType()))
+            indent() << "::llvm::append_range(" << v << ", " << getName(arg)
+                     << ");\n";
+          else
+            indent() << v << ".push_back(" << getName(arg) << ");\n";
+        }
+        return success();
+      })
+      .Case([&](ReplaceOp o) {
+        std::string target = getName(o.getInputOp());
+        OperandRange repl = o.getReplValues();
+        if (repl.size() == 1 && isRangeType(repl[0].getType())) {
+          indent() << "rewriter.replaceOp(" << target << ", "
+                   << getName(repl[0]) << ");\n";
+        } else if (llvm::none_of(repl, [](Value v) {
+                     return isRangeType(v.getType());
+                   })) {
+          indent() << "rewriter.replaceOp(" << target
+                   << ", ::mlir::ValueRange{";
+          llvm::interleaveComma(repl, os, [&](Value v) { os << getName(v); });
+          os << "});\n";
+        } else {
+          std::string vals = freshId("repl");
+          indent() << "::llvm::SmallVector<::mlir::Value> " << vals << ";\n";
+          for (Value v : repl) {
+            if (isRangeType(v.getType()))
+              indent() << "::llvm::append_range(" << vals << ", " << getName(v)
+                       << ");\n";
+            else
+              indent() << vals << ".push_back(" << getName(v) << ");\n";
+          }
+          indent() << "rewriter.replaceOp(" << target << ", " << vals << ");\n";
+        }
+        return success();
+      })
+      .Case([&](EraseOp o) {
+        indent() << "rewriter.eraseOp(" << getName(o.getInputOp()) << ");\n";
+        return success();
+      })
+      .Default([&](Operation *o) {
+        return o->emitError("unsupported op in C++ rewriter emitter");
+      });
+}
+
+LogicalResult MatcherCppEmitter::emitRewriter(RewriterOp rewriter,
+                                              StringRef fnName) {
+  resetState();
+  ctxExpr = "rewriter.getContext()";
+  indentLevel = 0;
+
+  os << "static ::llvm::LogicalResult " << fnName
+     << "(::mlir::PatternRewriter &rewriter, ::mlir::Location loc";
+  Block &body = rewriter.getBody().front();
+  for (BlockArgument arg : body.getArguments()) {
+    if (isRangeType(arg.getType()) &&
+        isa<pdl::OperationType>(
+            cast<pdl::RangeType>(arg.getType()).getElementType()))
+      return rewriter.emitError(
+          "operation range rewriter inputs are not supported "
+          "by the C++ emitter");
+    os << ", " << cppType(arg.getType()) << " " << declareName(arg);
+  }
+  os << ") {\n";
+  indentLevel = 1;
+  for (Operation &op : body)
+    if (failed(emitRewriterOp(&op)))
+      return failure();
+  indent() << "return ::mlir::success();\n";
+  indentLevel = 0;
+  os << "}\n\n";
+  return success();
+}
+
+LogicalResult MatcherCppEmitter::emitModule(Operation *root,
+                                            StringRef cppNamespace) {
   SmallVector<MatcherOp> matchers;
   root->walk([&](MatcherOp m) { matchers.push_back(m); });
 
   std::string structs;
+  std::string rewriters;
   {
     llvm::raw_string_ostream structOs(structs);
     MatcherCppEmitter sub(structOs, registry);
@@ -731,12 +1113,22 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
         return failure();
     rewriterDecls = std::move(sub.rewriterDecls);
     structNames = std::move(sub.structNames);
-    needsGroupHelper = sub.needsGroupHelper;
+    generatedRewriters = std::move(sub.generatedRewriters);
+  }
+  {
+    llvm::raw_string_ostream rewriterOs(rewriters);
+    MatcherCppEmitter sub(rewriterOs, registry);
+    for (auto &[func, fnName] : generatedRewriters)
+      if (failed(sub.emitRewriter(cast<RewriterOp>(func), fnName)))
+        return failure();
   }
 
   os << "//===- Generated by mlir-match-to-cpp. DO NOT EDIT. -===//\n";
   os << "//\n";
-  os << "// The user must provide the `rewrite_*` hooks declared below.\n";
+  os << "// Native constraints and rewrites `Name` are called as "
+        "`NamePDLFn`.\n";
+  os << "// The user must provide them and the `rewrite_*` hooks declared "
+        "below.\n";
   os << "//===--------------------------------------------------------------"
         "------===//\n\n";
   os << "#include \"mlir/IR/BuiltinAttributes.h\"\n";
@@ -744,32 +1136,18 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
   os << "#include \"mlir/IR/Operation.h\"\n";
   os << "#include \"mlir/IR/PatternMatch.h\"\n";
   os << "#include \"mlir/Parser/Parser.h\"\n";
+  os << "#include \"mlir/Target/MatchToCpp/Runtime.h\"\n";
+  os << "#include \"llvm/ADT/FunctionExtras.h\"\n";
   os << "#include \"llvm/ADT/STLExtras.h\"\n";
   os << "#include <optional>\n";
   os << "\n";
+  os << "#if defined(__GNUC__)\n";
+  os << "#pragma GCC diagnostic push\n";
+  os << "#pragma GCC diagnostic ignored \"-Wunused-variable\"\n";
+  os << "#endif\n\n";
 
-  if (needsGroupHelper) {
-    os << "static ::std::optional<::mlir::ValueRange>\n"
-          "__pdl_get_group(::mlir::Operation *op, unsigned index,\n"
-          "                ::mlir::ValueRange values, ::llvm::StringRef "
-          "segmentAttr,\n"
-          "                bool hasSegments) {\n"
-          "  if (hasSegments) {\n"
-          "    auto seg = "
-          "op->getAttrOfType<::mlir::DenseI32ArrayAttr>(segmentAttr);\n"
-          "    if (!seg || (unsigned)seg.asArrayRef().size() <= index)\n"
-          "      return ::std::nullopt;\n"
-          "    ::llvm::ArrayRef<int32_t> segs = seg.asArrayRef();\n"
-          "    unsigned start = 0;\n"
-          "    for (unsigned i = 0; i < index; ++i)\n"
-          "      start += segs[i];\n"
-          "    return values.slice(start, segs[index]);\n"
-          "  }\n"
-          "  if (values.size() >= index)\n"
-          "    return values.drop_front(index);\n"
-          "  return ::std::nullopt;\n"
-          "}\n\n";
-  }
+  if (!cppNamespace.empty())
+    os << "namespace " << cppNamespace << " {\n\n";
 
   if (!rewriterDecls.empty()) {
     os << "// Hooks the user must define and link:\n";
@@ -778,6 +1156,7 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
     os << "\n";
   }
 
+  os << rewriters;
   os << structs;
 
   os << "void populateGeneratedPatterns(::mlir::RewritePatternSet &set) {\n";
@@ -787,13 +1166,21 @@ LogicalResult MatcherCppEmitter::emitModule(Operation *root) {
     os << ">(set.getContext());\n";
   }
   os << "}\n";
+
+  if (!cppNamespace.empty())
+    os << "\n} // namespace " << cppNamespace << "\n";
+
+  os << "\n#if defined(__GNUC__)\n";
+  os << "#pragma GCC diagnostic pop\n";
+  os << "#endif\n";
   return success();
 }
 
 LogicalResult mlir::match::translateToCpp(Operation *op, raw_ostream &os,
-                                          const OpInfoRegistry &registry) {
+                                          const OpInfoRegistry &registry,
+                                          StringRef cppNamespace) {
   MatcherCppEmitter emitter(os, registry);
-  return emitter.emitModule(op);
+  return emitter.emitModule(op, cppNamespace);
 }
 
 LogicalResult mlir::match::translateToCpp(Operation *op, raw_ostream &os) {

@@ -18,10 +18,9 @@ module {
 // CHECK-NOT: #include "mlir/Dialect/Arith/IR/Arith.h"
 // CHECK: ::llvm::LogicalResult rewrite_addf(::mlir::PatternRewriter &rewriter, ::mlir::Operation *, ::mlir::Value);
 // CHECK: struct GeneratedMatcher_0 : public ::mlir::RewritePattern
+// CHECK: ::mlir::RewritePattern("arith.addf", 1, context)
 // CHECK: matchAndRewrite(::mlir::Operation *op,
-// CHECK:   ::mlir::arith::AddFOp castedOp0 = ::llvm::dyn_cast<::mlir::arith::AddFOp>(op);
-// CHECK:   if (!castedOp0)
-// CHECK:     return ::mlir::failure();
+// CHECK:   ::mlir::arith::AddFOp castedOp0 = ::llvm::cast<::mlir::arith::AddFOp>(op);
 // CHECK-NOT: getNumOperands()
 // CHECK:   ::mlir::Value v1 = castedOp0.getOperation()->getOperand(0);
 // CHECK-NOT: if (!v1)

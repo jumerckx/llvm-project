@@ -49,6 +49,33 @@ using namespace mlir;
 
 #include "TestMatchToCppPatterns.h.inc"
 
+static LogicalResult SmallIntPDLFn(PatternRewriter &rewriter,
+                                   PDLResultList &results,
+                                   ArrayRef<PDLValue> args) {
+  auto attr = dyn_cast<IntegerAttr>(args[0].cast<Attribute>());
+  if (!attr || attr.getInt() > 10)
+    return failure();
+  results.push_back(rewriter.getIntegerAttr(attr.getType(), 1));
+  return success();
+}
+
+static LogicalResult IsEvenPDLFn(PatternRewriter &, IntegerAttr attr) {
+  return success(attr.getInt() % 2 == 0);
+}
+
+static Attribute AddIntsPDLFn(PatternRewriter &rewriter, IntegerAttr lhs,
+                              IntegerAttr rhs) {
+  return rewriter.getIntegerAttr(lhs.getType(), lhs.getInt() + rhs.getInt());
+}
+
+static Attribute NullAttrPDLFn(PatternRewriter &) { return Attribute(); }
+
+static void EraseOpPDLFn(PatternRewriter &rewriter, Operation *op) {
+  rewriter.eraseOp(op);
+}
+
+#include "TestMatchToCppPDLPatterns.h.inc"
+
 namespace {
 struct TestMatchToCppPass
     : public PassWrapper<TestMatchToCppPass, OperationPass<>> {
@@ -66,10 +93,33 @@ struct TestMatchToCppPass
       signalPassFailure();
   }
 };
+
+struct TestMatchToCppPDLPass
+    : public PassWrapper<TestMatchToCppPDLPass, OperationPass<>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestMatchToCppPDLPass)
+
+  StringRef getArgument() const final { return "test-match-to-cpp-pdl"; }
+  StringRef getDescription() const final {
+    return "Apply PDL patterns compiled to C++ by mlir-match-to-cpp";
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect>();
+  }
+
+  void runOnOperation() final {
+    RewritePatternSet patterns(&getContext());
+    pdl_patterns::populateGeneratedPatterns(patterns);
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
+      signalPassFailure();
+  }
+};
 } // namespace
 
 namespace mlir {
 namespace test {
-void registerTestMatchToCppPass() { PassRegistration<TestMatchToCppPass>(); }
+void registerTestMatchToCppPass() {
+  PassRegistration<TestMatchToCppPass>();
+  PassRegistration<TestMatchToCppPDLPass>();
+}
 } // namespace test
 } // namespace mlir

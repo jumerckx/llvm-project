@@ -8,7 +8,9 @@ set(LIBS
   MLIRParser
   MLIRSupport
   MLIRPDLDialect
+  MLIRPDLToMatch
   MLIRMatchDialect
+  MLIRMatchTransforms
   MLIRTargetMatchToCpp
   MLIRTableGen
   )

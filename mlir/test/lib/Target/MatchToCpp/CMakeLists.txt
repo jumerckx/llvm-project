@@ -10,7 +10,22 @@ add_custom_command(
   DEPENDS mlir-match-to-cpp ${MATCH_TO_CPP_INPUT}
   COMMENT "Generating C++ matchers from TestMatchToCppPatterns.mlir"
   )
-add_custom_target(MLIRTestMatchToCppPatternsIncGen DEPENDS ${MATCH_TO_CPP_OUTPUT})
+set(MATCH_TO_CPP_PDL_INPUT
+  ${CMAKE_CURRENT_SOURCE_DIR}/Inputs/TestMatchToCppPDLPatterns.mlir)
+set(MATCH_TO_CPP_PDL_OUTPUT
+  ${CMAKE_CURRENT_BINARY_DIR}/TestMatchToCppPDLPatterns.h.inc)
+add_custom_command(
+  OUTPUT ${MATCH_TO_CPP_PDL_OUTPUT}
+  COMMAND $<TARGET_FILE:mlir-match-to-cpp> ${MATCH_TO_CPP_PDL_INPUT}
+          --ods=${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Arith/IR/ArithOps.td
+          -I ${MLIR_MAIN_INCLUDE_DIR} -I ${MLIR_INCLUDE_DIR}
+          --namespace=pdl_patterns
+          -o ${MATCH_TO_CPP_PDL_OUTPUT}
+  DEPENDS mlir-match-to-cpp ${MATCH_TO_CPP_PDL_INPUT}
+  COMMENT "Generating C++ patterns from TestMatchToCppPDLPatterns.mlir"
+  )
+add_custom_target(MLIRTestMatchToCppPatternsIncGen
+  DEPENDS ${MATCH_TO_CPP_OUTPUT} ${MATCH_TO_CPP_PDL_OUTPUT})
 
 add_mlir_library(MLIRTestMatchToCpp
   TestMatchToCpp.cpp
@@ -22,6 +37,7 @@ add_mlir_library(MLIRTestMatchToCpp
   )
 mlir_target_link_libraries(MLIRTestMatchToCpp PUBLIC
   MLIRArithDialect
+  MLIRInferTypeOpInterface
   MLIRIR
   MLIRPass
   MLIRSupport

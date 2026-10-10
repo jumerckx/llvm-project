@@ -15,8 +15,8 @@ module {
 }
 
 // CHECK-NOT: dyn_cast
-// CHECK:   if (op->getName().getStringRef() != "test.foo")
-// CHECK:     return ::mlir::failure();
+// CHECK:   ::mlir::RewritePattern("test.foo", 1, context)
+// CHECK-NOT: getName()
 // CHECK:   if (op->getNumOperands() != 2)
 // CHECK:     return ::mlir::failure();
 // CHECK:   ::mlir::Value v0 = (0 < op->getNumOperands()) ? op->getOperand(0) : ::mlir::Value();

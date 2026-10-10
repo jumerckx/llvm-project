@@ -19,8 +19,10 @@ using namespace mlir;
 namespace {
 class RewriterGen {
 public:
-  RewriterGen(OpBuilder &builder, SmallVectorImpl<Value> &usedMatchValues)
-      : builder(builder), usedMatchValues(usedMatchValues) {}
+  RewriterGen(OpBuilder &builder, SmallVectorImpl<Value> &usedMatchValues,
+              function_ref<bool(StringRef)> canInferResultTypes)
+      : builder(builder), usedMatchValues(usedMatchValues),
+        canInferResultTypes(canInferResultTypes) {}
 
   void generate(pdl::PatternOp pattern, match::RewriterOp rewriterOp);
 
@@ -41,11 +43,13 @@ private:
                                            bool &hasInferredResultTypes);
 
   Value mapRewriteValue(Value oldValue);
+  bool hasTypeInference(pdl::OperationOp op);
   Value getValueType(Location loc, Value value);
   Value getAllResults(Location loc, Value op);
 
   OpBuilder &builder;
   SmallVectorImpl<Value> &usedMatchValues;
+  function_ref<bool(StringRef)> canInferResultTypes;
   match::RewriterOp rewriterOp;
   DenseMap<Value, Value> rewriteValues;
 };
@@ -77,6 +81,13 @@ Value RewriterGen::mapRewriteValue(Value oldValue) {
   usedMatchValues.push_back(oldValue);
   return newValue = rewriterOp.getBody().addArgument(oldValue.getType(),
                                                      oldValue.getLoc());
+}
+
+bool RewriterGen::hasTypeInference(pdl::OperationOp op) {
+  if (op.hasTypeInference())
+    return true;
+  std::optional<StringRef> name = op.getOpName();
+  return name && canInferResultTypes && canInferResultTypes(*name);
 }
 
 Value RewriterGen::getValueType(Location loc, Value value) {
@@ -281,7 +292,7 @@ void RewriterGen::generateOperationResultTypeRewriter(
   if (!resultTypeValues.empty() && succeeded(tryResolveResultTypes()))
     return;
 
-  if (op.hasTypeInference()) {
+  if (hasTypeInference(op)) {
     hasInferredResultTypes = true;
     return;
   }
@@ -309,16 +320,17 @@ void RewriterGen::generateOperationResultTypeRewriter(
   llvm_unreachable("unable to infer result type for operation");
 }
 
-match::RewriterOp
-mlir::pdl_to_match::generateRewriter(pdl::PatternOp pattern,
-                                     SymbolTable &rewriterSymbolTable,
-                                     SmallVectorImpl<Value> &usedMatchValues) {
+match::RewriterOp mlir::pdl_to_match::generateRewriter(
+    pdl::PatternOp pattern, SymbolTable &rewriterSymbolTable,
+    SmallVectorImpl<Value> &usedMatchValues,
+    function_ref<bool(StringRef)> canInferResultTypes) {
   auto rewriterModule = cast<ModuleOp>(rewriterSymbolTable.getOp());
   OpBuilder builder = OpBuilder::atBlockEnd(rewriterModule.getBody());
   auto rewriterOp = match::RewriterOp::create(
       builder, pattern.getLoc(),
       pattern.getSymName().value_or("pdl_generated_rewriter"));
   rewriterSymbolTable.insert(rewriterOp);
-  RewriterGen(builder, usedMatchValues).generate(pattern, rewriterOp);
+  RewriterGen(builder, usedMatchValues, canInferResultTypes)
+      .generate(pattern, rewriterOp);
   return rewriterOp;
 }

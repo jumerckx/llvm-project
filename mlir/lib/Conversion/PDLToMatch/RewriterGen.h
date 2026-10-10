@@ -16,9 +16,10 @@
 namespace mlir {
 namespace pdl_to_match {
 
-match::RewriterOp generateRewriter(pdl::PatternOp pattern,
-                                   SymbolTable &rewriterSymbolTable,
-                                   SmallVectorImpl<Value> &usedMatchValues);
+match::RewriterOp
+generateRewriter(pdl::PatternOp pattern, SymbolTable &rewriterSymbolTable,
+                 SmallVectorImpl<Value> &usedMatchValues,
+                 function_ref<bool(StringRef)> canInferResultTypes = nullptr);
 
 } // namespace pdl_to_match
 } // namespace mlir

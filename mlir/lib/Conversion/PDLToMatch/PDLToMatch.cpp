@@ -141,9 +141,11 @@ namespace {
 class MatchEmitter {
 public:
   MatchEmitter(OpBuilder &builder, pdl::PatternOp pattern,
-               SymbolTable &rewriterSymbolTable)
+               SymbolTable &rewriterSymbolTable,
+               function_ref<bool(StringRef)> canInferResultTypes)
       : builder(builder), pattern(pattern), loc(pattern.getLoc()),
-        rewriterSymbolTable(rewriterSymbolTable) {}
+        rewriterSymbolTable(rewriterSymbolTable),
+        canInferResultTypes(canInferResultTypes) {}
 
   FailureOr<match::RewriterOp> emit();
 
@@ -217,6 +219,7 @@ private:
   pdl::PatternOp pattern;
   Location loc;
   SymbolTable &rewriterSymbolTable;
+  function_ref<bool(StringRef)> canInferResultTypes;
   DenseMap<Value, Value> valueMap;
 };
 } // namespace
@@ -483,8 +486,8 @@ FailureOr<match::RewriterOp> MatchEmitter::emit() {
   }
 
   SmallVector<Value> usedMatchValues;
-  match::RewriterOp rewriter =
-      generateRewriter(pattern, rewriterSymbolTable, usedMatchValues);
+  match::RewriterOp rewriter = generateRewriter(
+      pattern, rewriterSymbolTable, usedMatchValues, canInferResultTypes);
   SmallVector<Value> inputs = llvm::map_to_vector(
       usedMatchValues, [&](Value value) { return valueMap.lookup(value); });
   auto rewriterRef =
@@ -497,8 +500,10 @@ FailureOr<match::RewriterOp> MatchEmitter::emit() {
   return rewriter;
 }
 
-LogicalResult mlir::convertPDLToMatch(
-    ModuleOp module, DenseMap<Operation *, PDLPatternConfigSet *> *configMap) {
+LogicalResult
+mlir::convertPDLToMatch(ModuleOp module,
+                        DenseMap<Operation *, PDLPatternConfigSet *> *configMap,
+                        function_ref<bool(StringRef)> canInferResultTypes) {
   OpBuilder builder = OpBuilder::atBlockBegin(module.getBody());
   auto rewriterModule =
       ModuleOp::create(builder, module.getLoc(),
@@ -510,7 +515,8 @@ LogicalResult mlir::convertPDLToMatch(
        llvm::make_early_inc_range(module.getOps<pdl::PatternOp>())) {
     builder.setInsertionPoint(pattern);
     FailureOr<match::RewriterOp> rewriter =
-        MatchEmitter(builder, pattern, rewriterSymbolTable).emit();
+        MatchEmitter(builder, pattern, rewriterSymbolTable, canInferResultTypes)
+            .emit();
     if (failed(rewriter)) {
       result = failure();
       continue;

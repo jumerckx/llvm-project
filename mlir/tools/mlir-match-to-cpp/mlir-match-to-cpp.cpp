@@ -6,8 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Conversion/PDLToMatch/PDLToMatch.h"
 #include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/Match/Transforms/Passes.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
+#include "mlir/Dialect/PDL/IR/PDLOps.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -80,6 +83,11 @@ static LogicalResult buildRegistry(ArrayRef<std::string> odsFiles,
           op.getOperands(), op.getNumOperands(), attrSizedOperands);
       info.fixedNumResults =
           fixedFlatCount(op.getResults(), op.getNumResults(), attrSizedResults);
+      info.inferResultTypes =
+          op.getTrait("::mlir::InferTypeOpInterface::Trait") != nullptr;
+      for (const tblgen::NamedAttribute &attr : op.getAttributes())
+        if (!attr.attr.isDerivedAttr())
+          info.attrGetters[attr.name] = op.getGetterName(attr.name);
 
       registry.insert(op.getOperationName(), std::move(info));
     }
@@ -107,6 +115,16 @@ int main(int argc, char **argv) {
       llvm::cl::desc("ODS `.td` file(s) whose ops should be matched with their "
                      "concrete C++ class (DRR-style). May be repeated."),
       llvm::cl::value_desc("filename"));
+
+  llvm::cl::opt<std::string> cppNamespace(
+      "namespace",
+      llvm::cl::desc("C++ namespace to emit the patterns and rewriters in"),
+      llvm::cl::init(""));
+
+  llvm::cl::opt<bool> combine(
+      "combine-matchers",
+      llvm::cl::desc("Combine the matchers of PDL input into a single matcher"),
+      llvm::cl::init(true));
 
   llvm::cl::list<std::string> macroNames(
       "D",
@@ -139,6 +157,18 @@ int main(int argc, char **argv) {
   if (!module)
     return 1;
 
+  if (!module->getOps<pdl::PatternOp>().empty()) {
+    auto canInferResultTypes = [&](StringRef name) {
+      const match::OpInfo *info = registry.lookup(name);
+      return info && info->inferResultTypes;
+    };
+    if (failed(convertPDLToMatch(*module, /*configMap=*/nullptr,
+                                 canInferResultTypes)))
+      return 1;
+    if (combine && failed(match::combineMatchers(*module)))
+      return 1;
+  }
+
   std::unique_ptr<llvm::ToolOutputFile> output =
       openOutputFile(outputFilename, &errorMessage);
   if (!output) {
@@ -147,7 +177,7 @@ int main(int argc, char **argv) {
   }
 
   if (failed(match::translateToCpp(module->getOperation(), output->os(),
-                                   registry)))
+                                   registry, cppNamespace)))
     return 1;
 
   output->keep();

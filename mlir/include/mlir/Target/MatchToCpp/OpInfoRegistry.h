@@ -24,6 +24,8 @@ struct OpInfo {
   bool attrSizedResultSegments = false;
   int fixedNumOperands = -1;
   int fixedNumResults = -1;
+  bool inferResultTypes = false;
+  llvm::StringMap<std::string> attrGetters;
 
   std::optional<unsigned> getFixedNumOperands() const {
     if (fixedNumOperands < 0)
@@ -34,6 +36,10 @@ struct OpInfo {
     if (fixedNumResults < 0)
       return std::nullopt;
     return static_cast<unsigned>(fixedNumResults);
+  }
+  const std::string *lookupAttrGetter(llvm::StringRef attrName) const {
+    auto it = attrGetters.find(attrName);
+    return it == attrGetters.end() ? nullptr : &it->second;
   }
 };
 

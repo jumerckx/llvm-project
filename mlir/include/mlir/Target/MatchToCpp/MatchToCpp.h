@@ -16,7 +16,8 @@ namespace mlir {
 class Operation;
 namespace match {
 LogicalResult translateToCpp(Operation *op, raw_ostream &os,
-                             const OpInfoRegistry &registry);
+                             const OpInfoRegistry &registry,
+                             StringRef cppNamespace = "");
 LogicalResult translateToCpp(Operation *op, raw_ostream &os);
 
 } // namespace match

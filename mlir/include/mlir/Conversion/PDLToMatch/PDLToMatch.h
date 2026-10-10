@@ -21,7 +21,8 @@ class PDLPatternConfigSet;
 
 LogicalResult convertPDLToMatch(
     ModuleOp module,
-    DenseMap<Operation *, PDLPatternConfigSet *> *configMap = nullptr);
+    DenseMap<Operation *, PDLPatternConfigSet *> *configMap = nullptr,
+    function_ref<bool(StringRef)> canInferResultTypes = nullptr);
 
 } // namespace mlir
 
