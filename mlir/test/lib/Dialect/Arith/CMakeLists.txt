@@ -36,8 +36,18 @@ add_custom_command(
   DEPENDS mlir-match-to-cpp ${ARITH_PDL_OUTPUT}
   COMMENT "Generating per-pattern C++ patterns from ArithCanonicalization.pdll"
   )
+set(ARITH_DRR_INPUT ${MLIR_BINARY_DIR}/lib/Dialect/Arith/IR/ArithCanonicalization.inc)
+set(ARITH_DRR_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ArithCanonicalizationDRR.inc)
+add_custom_command(
+  OUTPUT ${ARITH_DRR_OUTPUT}
+  COMMAND ${CMAKE_COMMAND} -DINPUT=${ARITH_DRR_INPUT} -DOUTPUT=${ARITH_DRR_OUTPUT}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/InstrumentDRRRewrites.cmake
+  DEPENDS MLIRArithCanonicalizationIncGen ${ARITH_DRR_INPUT}
+          ${CMAKE_CURRENT_SOURCE_DIR}/InstrumentDRRRewrites.cmake
+  COMMENT "Instrumenting the rewrites of the DRR arith canonicalization patterns"
+  )
 add_custom_target(MLIRTestArithCanonicalizationMatchIncGen
-  DEPENDS ${ARITH_MATCH_OUTPUT} ${ARITH_MATCH_SPLIT_OUTPUT})
+  DEPENDS ${ARITH_MATCH_OUTPUT} ${ARITH_MATCH_SPLIT_OUTPUT} ${ARITH_DRR_OUTPUT})
 
 # Exclude tests from libMLIR.so
 add_mlir_library(MLIRArithTestPasses
@@ -67,9 +77,7 @@ mlir_target_link_libraries(MLIRArithTestPasses PUBLIC
   MLIRVectorDialect
 )
 
-# For the DRR-generated ArithCanonicalization.inc.
 target_include_directories(MLIRArithTestPasses
   PRIVATE
-  ${MLIR_BINARY_DIR}/lib/Dialect/Arith/IR
   ${CMAKE_CURRENT_BINARY_DIR}
   )

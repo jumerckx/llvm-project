@@ -14,6 +14,21 @@
 // RUN: diff %t.drr %t.pdll
 // RUN: diff %t.drr %t.match-cpp
 // RUN: diff %t.drr %t.match-cpp-split
+// RUN: mlir-opt %s -test-arith-canonicalize-drr=phase-timing -o %t.drr-timed 2>&1 | FileCheck %s --check-prefix=TIMING
+// RUN: mlir-opt %s -test-arith-canonicalize-pdll=phase-timing -o %t.pdll-timed 2>&1 | FileCheck %s --check-prefix=TIMING
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp=phase-timing -o %t.match-cpp-timed 2>&1 | FileCheck %s --check-prefix=TIMING
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-split=phase-timing -o %t.match-cpp-split-timed 2>&1 | FileCheck %s --check-prefix=TIMING
+// RUN: diff %t.drr %t.drr-timed
+// RUN: diff %t.drr %t.pdll-timed
+// RUN: diff %t.drr %t.match-cpp-timed
+// RUN: diff %t.drr %t.match-cpp-split-timed
+
+// TIMING:      phase timing ===
+// TIMING-NEXT:   total
+// TIMING-NEXT:   driver
+// TIMING-NEXT:   match
+// TIMING-NEXT:   rewrite
+// TIMING-NEXT:   {{[0-9]+}} pattern applications, {{[1-9][0-9]*}} rewrites
 
 //===----------------------------------------------------------------------===//
 // AddIOp

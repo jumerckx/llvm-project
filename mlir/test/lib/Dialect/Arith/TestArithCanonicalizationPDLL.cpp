@@ -25,7 +25,10 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Rewrite/PatternApplicator.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/Support/Format.h"
+#include <chrono>
 
 using namespace mlir;
 using namespace mlir::arith;
@@ -137,11 +140,82 @@ static bool isConstantI1(Value value, bool expected) {
 }
 
 //===----------------------------------------------------------------------===//
+// Phase timing
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct PhaseTimer {
+  using Clock = std::chrono::steady_clock;
+
+  void beginRewrite() { rewriteStart = Clock::now(); }
+  void endRewrite() {
+    rewrites += Clock::now() - rewriteStart;
+    ++numRewrites;
+  }
+
+  Clock::duration patterns{};
+  Clock::duration rewrites{};
+  Clock::time_point rewriteStart;
+  uint64_t numPatternCalls = 0;
+  uint64_t numRewrites = 0;
+};
+
+thread_local PhaseTimer *activePhaseTimer = nullptr;
+
+struct RewritePhaseScope {
+  RewritePhaseScope(PatternRewriter &) {
+    if (activePhaseTimer)
+      activePhaseTimer->beginRewrite();
+  }
+  ~RewritePhaseScope() {
+    if (activePhaseTimer)
+      activePhaseTimer->endRewrite();
+  }
+};
+
+class RewritePhaseConfig : public PDLPatternConfigBase<RewritePhaseConfig> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RewritePhaseConfig)
+
+  void notifyRewriteBegin(PatternRewriter &) final {
+    if (activePhaseTimer)
+      activePhaseTimer->beginRewrite();
+  }
+  void notifyRewriteEnd(PatternRewriter &) final {
+    if (activePhaseTimer)
+      activePhaseTimer->endRewrite();
+  }
+};
+
+class PhaseTimedPatterns : public RewritePattern {
+public:
+  PhaseTimedPatterns(MLIRContext *context, FrozenRewritePatternSet inner)
+      : RewritePattern(MatchAnyOpTypeTag(), PatternBenefit(1), context),
+        inner(std::move(inner)), applicator(this->inner) {
+    applicator.applyDefaultCostModel();
+  }
+
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
+    PhaseTimer::Clock::time_point start = PhaseTimer::Clock::now();
+    LogicalResult result = applicator.matchAndRewrite(op, rewriter);
+    activePhaseTimer->patterns += PhaseTimer::Clock::now() - start;
+    ++activePhaseTimer->numPatternCalls;
+    return result;
+  }
+
+private:
+  FrozenRewritePatternSet inner;
+  mutable PatternApplicator applicator;
+};
+} // namespace
+
+//===----------------------------------------------------------------------===//
 // DRR patterns
 //===----------------------------------------------------------------------===//
 
 namespace drr {
-#include "ArithCanonicalization.inc"
+#include "ArithCanonicalizationDRR.inc"
 } // namespace drr
 
 //===----------------------------------------------------------------------===//
@@ -187,7 +261,7 @@ static LogicalResult withResultList(PatternRewriter &rewriter,
 }
 
 static void populatePDLLPatterns(RewritePatternSet &patterns) {
-  populateGeneratedPDLLPatterns(patterns);
+  populateGeneratedPDLLPatterns(patterns, RewritePhaseConfig());
 
   // Native constraints with results can't be defined inline in PDLL.
   PDLPatternModule &pdlPatterns = patterns.getPDLPatterns();
@@ -228,19 +302,53 @@ struct TestArithCanonicalizationBase
     // `runOnOperation`.
     RewritePatternSet patternList(ctx);
     static_cast<DerivedT *>(this)->populatePatterns(patternList);
-    patterns = std::move(patternList);
+    if (!phaseTiming) {
+      patterns = std::move(patternList);
+      return success();
+    }
+    RewritePatternSet timed(ctx);
+    timed.add<PhaseTimedPatterns>(
+        ctx, FrozenRewritePatternSet(std::move(patternList)));
+    patterns = std::move(timed);
     return success();
   }
 
   void runOnOperation() override {
     GreedyRewriteConfig config;
     config.enableFolding(fold);
+    PhaseTimer timer;
+    if (phaseTiming)
+      activePhaseTimer = &timer;
+    PhaseTimer::Clock::time_point start = PhaseTimer::Clock::now();
     (void)applyPatternsGreedily(this->getOperation(), patterns, config);
+    PhaseTimer::Clock::duration total = PhaseTimer::Clock::now() - start;
+    activePhaseTimer = nullptr;
+    if (phaseTiming)
+      printPhaseTiming(timer, total);
+  }
+
+  void printPhaseTiming(const PhaseTimer &timer,
+                        PhaseTimer::Clock::duration total) {
+    auto print = [](StringRef name, PhaseTimer::Clock::duration time) {
+      llvm::errs() << llvm::format("  %-8s %.6f s\n", name.str().c_str(),
+                                   std::chrono::duration<double>(time).count());
+    };
+    llvm::errs() << "=== " << this->getArgument() << " phase timing ===\n";
+    print("total", total);
+    print("driver", total - timer.patterns);
+    print("match", timer.patterns - timer.rewrites);
+    print("rewrite", timer.rewrites);
+    llvm::errs() << "  " << timer.numPatternCalls << " pattern applications, "
+                 << timer.numRewrites << " rewrites\n";
   }
 
   Pass::Option<bool> fold{*this, "fold",
                           llvm::cl::desc("Fold operations while rewriting"),
                           llvm::cl::init(true)};
+  Pass::Option<bool> phaseTiming{
+      *this, "phase-timing",
+      llvm::cl::desc("Report the time spent matching and rewriting"),
+      llvm::cl::init(false)};
 
   FrozenRewritePatternSet patterns;
 };
@@ -289,7 +397,7 @@ struct TestArithCanonicalizationMatchCppPass
   }
 
   void populatePatterns(RewritePatternSet &patterns) {
-    match_cpp::populateGeneratedPatterns(patterns);
+    match_cpp::populateGeneratedPatterns(patterns, RewritePhaseConfig());
   }
 };
 
@@ -308,7 +416,7 @@ struct TestArithCanonicalizationMatchCppSplitPass
   }
 
   void populatePatterns(RewritePatternSet &patterns) {
-    match_cpp_split::populateGeneratedPatterns(patterns);
+    match_cpp_split::populateGeneratedPatterns(patterns, RewritePhaseConfig());
   }
 };
 } // namespace
