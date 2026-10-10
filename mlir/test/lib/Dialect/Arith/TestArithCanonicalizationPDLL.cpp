@@ -9,12 +9,15 @@
 // Test passes that apply either the DRR patterns of
 // lib/Dialect/Arith/IR/ArithCanonicalization.td, or their PDLL port in
 // ArithCanonicalization.pdll, using the greedy pattern rewrite driver. Only
-// those patterns are applied (no C++ canonicalization patterns), so the two
-// passes can be used to compare the performance of DRR and PDL rewrites.
+// those patterns are applied (no C++ canonicalization patterns), so the
+// passes can be used to compare the performance of DRR and PDL rewrites. The
+// PDLL patterns are either run by the PDL bytecode interpreter, or compiled to
+// C++ through the match dialect by mlir-match-to-cpp.
 //
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Match/IR/Match.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Matchers.h"
@@ -151,14 +154,35 @@ namespace drr {
 /// value `$c` is bound to: matches if the value is produced by a constant-like
 /// op that folds to an attribute of kind `AttrT`, and returns that attribute.
 template <typename AttrT>
-static LogicalResult constantValueOfKind(PatternRewriter &,
-                                         PDLResultList &results,
-                                         ArrayRef<PDLValue> args) {
+static FailureOr<Attribute> constantValueOfKind(PatternRewriter &,
+                                                Value value) {
   Attribute attr;
-  if (!matchPattern(args[0].cast<Value>(), m_Constant(&attr)) ||
-      !isa<AttrT>(attr))
+  if (!matchPattern(value, m_Constant(&attr)) || !isa<AttrT>(attr))
     return failure();
-  results.push_back(attr);
+  return attr;
+}
+
+static FailureOr<Attribute> ConstantValuePDLFn(PatternRewriter &rewriter,
+                                               Value value) {
+  return constantValueOfKind<Attribute>(rewriter, value);
+}
+static FailureOr<Attribute> ConstantIntValuePDLFn(PatternRewriter &rewriter,
+                                                  Value value) {
+  return constantValueOfKind<IntegerAttr>(rewriter, value);
+}
+static FailureOr<Attribute> ConstantTypedValuePDLFn(PatternRewriter &rewriter,
+                                                    Value value) {
+  return constantValueOfKind<TypedAttr>(rewriter, value);
+}
+
+template <FailureOr<Attribute> (*ConstraintFn)(PatternRewriter &, Value)>
+static LogicalResult withResultList(PatternRewriter &rewriter,
+                                    PDLResultList &results,
+                                    ArrayRef<PDLValue> args) {
+  FailureOr<Attribute> attr = ConstraintFn(rewriter, args[0].cast<Value>());
+  if (failed(attr))
+    return failure();
+  results.push_back(*attr);
   return success();
 }
 
@@ -168,12 +192,19 @@ static void populatePDLLPatterns(RewritePatternSet &patterns) {
   // Native constraints with results can't be defined inline in PDLL.
   PDLPatternModule &pdlPatterns = patterns.getPDLPatterns();
   pdlPatterns.registerConstraintFunction("ConstantValue",
-                                         constantValueOfKind<Attribute>);
+                                         withResultList<ConstantValuePDLFn>);
   pdlPatterns.registerConstraintFunction("ConstantIntValue",
-                                         constantValueOfKind<IntegerAttr>);
-  pdlPatterns.registerConstraintFunction("ConstantTypedValue",
-                                         constantValueOfKind<TypedAttr>);
+                                         withResultList<ConstantIntValuePDLFn>);
+  pdlPatterns.registerConstraintFunction(
+      "ConstantTypedValue", withResultList<ConstantTypedValuePDLFn>);
 }
+
+//===----------------------------------------------------------------------===//
+// PDLL patterns compiled to C++ through the match dialect
+//===----------------------------------------------------------------------===//
+
+#include "ArithCanonicalizationMatch.h.inc"
+#include "ArithCanonicalizationMatchSplit.h.inc"
 
 //===----------------------------------------------------------------------===//
 // Passes
@@ -188,7 +219,7 @@ struct TestArithCanonicalizationBase
       : PassWrapper<DerivedT, OperationPass<>>(other) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<arith::ArithDialect, pdl::PDLDialect,
+    registry.insert<arith::ArithDialect, match::MatchDialect, pdl::PDLDialect,
                     pdl_interp::PDLInterpDialect>();
   }
 
@@ -242,6 +273,44 @@ struct TestArithCanonicalizationPDLLPass
     populatePDLLPatterns(patterns);
   }
 };
+
+struct TestArithCanonicalizationMatchCppPass
+    : public TestArithCanonicalizationBase<
+          TestArithCanonicalizationMatchCppPass> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      TestArithCanonicalizationMatchCppPass)
+
+  StringRef getArgument() const final {
+    return "test-arith-canonicalize-match-cpp";
+  }
+  StringRef getDescription() const final {
+    return "Apply the PDLL arith canonicalization patterns compiled to a "
+           "single combined C++ matcher";
+  }
+
+  void populatePatterns(RewritePatternSet &patterns) {
+    match_cpp::populateGeneratedPatterns(patterns);
+  }
+};
+
+struct TestArithCanonicalizationMatchCppSplitPass
+    : public TestArithCanonicalizationBase<
+          TestArithCanonicalizationMatchCppSplitPass> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      TestArithCanonicalizationMatchCppSplitPass)
+
+  StringRef getArgument() const final {
+    return "test-arith-canonicalize-match-cpp-split";
+  }
+  StringRef getDescription() const final {
+    return "Apply the PDLL arith canonicalization patterns compiled to one "
+           "C++ pattern per PDL pattern";
+  }
+
+  void populatePatterns(RewritePatternSet &patterns) {
+    match_cpp_split::populateGeneratedPatterns(patterns);
+  }
+};
 } // namespace
 
 namespace mlir {
@@ -249,6 +318,8 @@ namespace test {
 void registerTestArithCanonicalizationPasses() {
   PassRegistration<TestArithCanonicalizationDRRPass>();
   PassRegistration<TestArithCanonicalizationPDLLPass>();
+  PassRegistration<TestArithCanonicalizationMatchCppPass>();
+  PassRegistration<TestArithCanonicalizationMatchCppSplitPass>();
 }
 } // namespace test
 } // namespace mlir

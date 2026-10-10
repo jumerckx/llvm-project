@@ -1,12 +1,19 @@
 // Check that the PDLL port of the DRR arith canonicalization patterns
 // (test/lib/Dialect/Arith/ArithCanonicalization.pdll) behaves the same as the
-// DRR patterns (lib/Dialect/Arith/IR/ArithCanonicalization.td).
+// DRR patterns (lib/Dialect/Arith/IR/ArithCanonicalization.td), both when run
+// by the PDL bytecode and when compiled to C++ by mlir-match-to-cpp.
 
 // RUN: mlir-opt %s -test-arith-canonicalize-drr | FileCheck %s
 // RUN: mlir-opt %s -test-arith-canonicalize-pdll | FileCheck %s
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp | FileCheck %s
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-split | FileCheck %s
 // RUN: mlir-opt %s -test-arith-canonicalize-drr -o %t.drr
 // RUN: mlir-opt %s -test-arith-canonicalize-pdll -o %t.pdll
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp -o %t.match-cpp
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-split -o %t.match-cpp-split
 // RUN: diff %t.drr %t.pdll
+// RUN: diff %t.drr %t.match-cpp
+// RUN: diff %t.drr %t.match-cpp-split
 
 //===----------------------------------------------------------------------===//
 // AddIOp
