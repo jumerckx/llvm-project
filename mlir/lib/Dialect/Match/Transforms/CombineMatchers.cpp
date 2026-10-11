@@ -13,6 +13,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
@@ -71,7 +72,10 @@ struct TreeNode {
 
 class Combiner {
 public:
-  Combiner(ModuleOp module) : module(module) {}
+  Combiner(ModuleOp module, ArrayRef<MatcherOp> inputMatchers,
+           StringRef combinedName)
+      : module(module), inputMatchers(inputMatchers),
+        combinedName(combinedName) {}
   LogicalResult run();
 
 private:
@@ -89,6 +93,8 @@ private:
                 IRMapping &mapping);
 
   ModuleOp module;
+  SmallVector<MatcherOp> inputMatchers;
+  std::string combinedName;
   std::unique_ptr<Block> poolBody;
   Value poolRoot;
   DenseMap<PoolKey, Operation *> poolDedup;
@@ -183,8 +189,6 @@ LogicalResult Combiner::collectPredicates(Block &block, MatcherInfo &info) {
 }
 
 LogicalResult Combiner::buildCanonicalPool() {
-  SmallVector<MatcherOp> inputMatchers(module.getOps<MatcherOp>());
-
   poolBody = std::make_unique<Block>();
   poolRoot = poolBody->addArgument(pdl::OperationType::get(module.getContext()),
                                    module.getLoc());
@@ -529,7 +533,7 @@ void Combiner::emitCombinedMatcher() {
   Location loc = module.getLoc();
   StringAttr symName = matcherInfos.size() == 1
                            ? matcherInfos.front().matcher.getSymNameAttr()
-                           : builder.getStringAttr("combined");
+                           : builder.getStringAttr(combinedName);
   auto combined = MatcherOp::create(builder, loc, symName);
   Block *body = &combined.getBodyRegion().emplaceBlock();
   IRMapping mapping;
@@ -555,15 +559,38 @@ LogicalResult Combiner::run() {
   return success();
 }
 
-LogicalResult mlir::match::combineMatchers(ModuleOp module) {
-  return Combiner(module).run();
+static StringRef getRootName(MatcherOp matcher) {
+  Block &body = matcher.getBodyRegion().front();
+  for (auto hasName : body.getOps<HasNameOp>())
+    if (hasName.getOp() == body.getArgument(0))
+      return hasName.getName();
+  return StringRef();
+}
+
+LogicalResult mlir::match::combineMatchers(ModuleOp module, bool groupByRoot) {
+  SmallVector<MatcherOp> matchers(module.getOps<MatcherOp>());
+  if (!groupByRoot)
+    return Combiner(module, matchers, "combined").run();
+
+  llvm::MapVector<StringRef, SmallVector<MatcherOp>> groups;
+  for (MatcherOp matcher : matchers)
+    groups[getRootName(matcher)].push_back(matcher);
+  for (auto &[rootName, group] : llvm::reverse(groups)) {
+    std::string name =
+        rootName.empty() ? "combined" : ("combined_" + rootName).str();
+    if (failed(Combiner(module, group, name).run()))
+      return failure();
+  }
+  return success();
 }
 
 namespace {
 struct CombineMatchersPass
     : public match::impl::MatchCombineMatchersPassBase<CombineMatchersPass> {
+  using MatchCombineMatchersPassBase::MatchCombineMatchersPassBase;
+
   void runOnOperation() final {
-    if (failed(combineMatchers(getOperation())))
+    if (failed(combineMatchers(getOperation(), groupByRoot)))
       signalPassFailure();
   }
 };

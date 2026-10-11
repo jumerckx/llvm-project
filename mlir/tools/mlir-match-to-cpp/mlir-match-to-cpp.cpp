@@ -29,6 +29,8 @@
 
 using namespace mlir;
 
+enum class Combine { None, Root, All };
+
 template <typename RangeT>
 static int fixedFlatCount(RangeT &&groups, int count, bool attrSizedSegments) {
   if (attrSizedSegments)
@@ -121,10 +123,15 @@ int main(int argc, char **argv) {
       llvm::cl::desc("C++ namespace to emit the patterns and rewriters in"),
       llvm::cl::init(""));
 
-  llvm::cl::opt<bool> combine(
+  llvm::cl::opt<Combine> combine(
       "combine-matchers",
-      llvm::cl::desc("Combine the matchers of PDL input into a single matcher"),
-      llvm::cl::init(true));
+      llvm::cl::desc("How to combine the matchers of PDL input"),
+      llvm::cl::values(
+          clEnumValN(Combine::None, "none", "Emit one pattern per PDL pattern"),
+          clEnumValN(Combine::Root, "root",
+                     "Emit one pattern per root operation name"),
+          clEnumValN(Combine::All, "all", "Emit a single pattern")),
+      llvm::cl::init(Combine::Root));
 
   llvm::cl::list<std::string> macroNames(
       "D",
@@ -165,7 +172,10 @@ int main(int argc, char **argv) {
     if (failed(convertPDLToMatch(*module, /*configMap=*/nullptr,
                                  canInferResultTypes)))
       return 1;
-    if (combine && failed(match::combineMatchers(*module)))
+    if (combine != Combine::None &&
+        failed(
+            match::combineMatchers(*module,
+                                   /*groupByRoot=*/combine == Combine::Root)))
       return 1;
   }
 

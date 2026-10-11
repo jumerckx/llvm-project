@@ -18,7 +18,7 @@ namespace match {
 #define GEN_PASS_DECL
 #include "mlir/Dialect/Match/Transforms/Passes.h.inc"
 
-LogicalResult combineMatchers(ModuleOp module);
+LogicalResult combineMatchers(ModuleOp module, bool groupByRoot = false);
 
 #define GEN_PASS_REGISTRATION
 #include "mlir/Dialect/Match/Transforms/Passes.h.inc"

@@ -15,6 +15,11 @@ def MatchCombineMatchersPass
     : Pass<"match-combine-matchers", "ModuleOp"> {
   let summary = "Combine multiple match.matcher ops into a single one";
   let dependentDialects = ["match::MatchDialect"];
+  let options = [
+    Option<"groupByRoot", "group-by-root", "bool", /*default=*/"false",
+           "Combine the matchers with the same root operation name into "
+           "one matcher per root operation name">
+  ];
 }
 
 #endif // MLIR_DIALECT_MATCH_TRANSFORMS_PASSES
