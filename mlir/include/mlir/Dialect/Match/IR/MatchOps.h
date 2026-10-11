@@ -17,6 +17,13 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
+namespace mlir {
+namespace match {
+template <typename ConcreteType>
+class Question : public OpTrait::TraitBase<ConcreteType, Question> {};
+} // namespace match
+} // namespace mlir
+
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Match/IR/MatchOps.h.inc"
 

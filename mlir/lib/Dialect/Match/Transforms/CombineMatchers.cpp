@@ -56,6 +56,7 @@ struct MatcherInfo {
   MatcherOp matcher;
   SuccessOp success;
   DenseSet<Operation *> preds;
+  DenseSet<Operation *> questions;
   SmallVector<Operation *> guards;
   IRMapping toCanonical;
 };
@@ -98,6 +99,9 @@ private:
   std::unique_ptr<Block> poolBody;
   Value poolRoot;
   DenseMap<PoolKey, Operation *> poolDedup;
+  DenseMap<PoolKey, Operation *> questionDedup;
+  DenseMap<Operation *, Operation *> questionOf;
+  DenseMap<Operation *, unsigned> numAnswers;
   DenseMap<Operation *, unsigned> primary;
   DenseMap<Operation *, unsigned> secondary;
   DenseMap<Operation *, unsigned> insertionIndex;
@@ -134,6 +138,14 @@ Combiner::getOrCreatePoolOp(Operation *modelOp,
 
   insertionIndex[poolOp] = nextInsertionIndex++;
   poolDedup[key] = poolOp;
+
+  Operation *question = poolOp;
+  if (poolOp->hasTrait<Question>()) {
+    PoolKey questionKey{poolOp->getName(), DictionaryAttr(), key.operands};
+    question = questionDedup.try_emplace(questionKey, poolOp).first->second;
+  }
+  questionOf[poolOp] = question;
+  ++numAnswers[question];
   return poolOp;
 }
 
@@ -168,8 +180,9 @@ LogicalResult Combiner::collectPredicates(Block &block, MatcherInfo &info) {
          llvm::zip(op.getResults(), poolOp->getResults()))
       info.toCanonical.map(origRes, poolRes);
 
-    if (info.preds.insert(poolOp).second)
-      ++primary[poolOp];
+    info.preds.insert(poolOp);
+    if (info.questions.insert(questionOf[poolOp]).second)
+      ++primary[questionOf[poolOp]];
 
     if (isa<ApplyNativeConstraintOp>(poolOp)) {
       for (Operation *guard : info.guards)
@@ -213,10 +226,10 @@ LogicalResult Combiner::buildCanonicalPool() {
 
   for (MatcherInfo &info : matcherInfos) {
     unsigned total = 0;
-    for (Operation *p : info.preds)
-      total += primary[p] * primary[p];
-    for (Operation *p : info.preds)
-      secondary[p] += total;
+    for (Operation *q : info.questions)
+      total += primary[q] * primary[q];
+    for (Operation *q : info.questions)
+      secondary[q] += total;
   }
 
   return success();
@@ -253,8 +266,11 @@ void Combiner::sortCanonicalPool() {
   for (Operation &op : *poolBody)
     sortedPoolOps.push_back(&op);
   llvm::sort(sortedPoolOps, [&](Operation *a, Operation *b) {
-    return std::make_tuple(primary[a], secondary[a], insertionIndex[b]) >
-           std::make_tuple(primary[b], secondary[b], insertionIndex[a]);
+    Operation *qa = questionOf[a], *qb = questionOf[b];
+    return std::make_tuple(primary[qa], secondary[qa], numAnswers[qa],
+                           insertionIndex[qb], insertionIndex[b]) >
+           std::make_tuple(primary[qb], secondary[qb], numAnswers[qb],
+                           insertionIndex[qa], insertionIndex[a]);
   });
   stableTopologicalSort(sortedPoolOps.begin(), sortedPoolOps.end(),
                         [&](Operation *a, Operation *b) {

@@ -18,6 +18,10 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 class Match_Op<string mnemonic, list<Trait> traits = []>
     : Op<Match_Dialect, mnemonic, traits>;
 
+def Match_Question : NativeOpTrait<"Question"> {
+  let cppNamespace = "::mlir::match";
+}
+
 def Match_MatcherOp : Match_Op<"matcher", [
     IsolatedFromAbove, SingleBlock, NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>,
@@ -255,7 +259,7 @@ def Match_IsNotNullOp : Match_Op<"is_not_null", [
   let assemblyFormat = "$optionalValue `:` type($unwrapped) attr-dict";
 }
 
-def Match_HasNameOp : Match_Op<"has_name"> {
+def Match_HasNameOp : Match_Op<"has_name", [Match_Question]> {
   let summary = "Test the operation name";
   let arguments = (ins PDL_Operation:$op, StrAttr:$name);
   let assemblyFormat = "$op `,` $name attr-dict";
@@ -267,26 +271,26 @@ def Match_EqualOp : Match_Op<"equal", [SameTypeOperands]> {
   let assemblyFormat = "$lhs `,` $rhs `:` type($lhs) attr-dict";
 }
 
-def Match_HasTypeOp : Match_Op<"has_type"> {
+def Match_HasTypeOp : Match_Op<"has_type", [Match_Question]> {
   let summary = "Test that a type matches a constant type";
   let arguments = (ins PDL_Type:$typeValue, TypeAttr:$constantType);
   let assemblyFormat = "$typeValue `,` $constantType attr-dict";
 }
 
-def Match_HasTypesOp : Match_Op<"has_types"> {
+def Match_HasTypesOp : Match_Op<"has_types", [Match_Question]> {
   let summary = "Test that a range of types matches a constant array of types";
   let arguments = (ins PDL_RangeOf<PDL_Type>:$types,
                        TypeArrayAttr:$constantTypes);
   let assemblyFormat = "$types `,` $constantTypes attr-dict";
 }
 
-def Match_HasAttrValueOp : Match_Op<"has_attr_value"> {
+def Match_HasAttrValueOp : Match_Op<"has_attr_value", [Match_Question]> {
   let summary = "Test that an attribute matches a constant value";
   let arguments = (ins PDL_Attribute:$attribute, AnyAttr:$value);
   let assemblyFormat = "$attribute `is` $value attr-dict";
 }
 
-def Match_CheckOperandCountOp : Match_Op<"check_operand_count"> {
+def Match_CheckOperandCountOp : Match_Op<"check_operand_count", [Match_Question]> {
   let summary = "Test the operand count of an operation";
   let arguments = (ins PDL_Operation:$op,
                        ConfinedAttr<I32Attr, [IntNonNegative]>:$count,
@@ -296,7 +300,7 @@ def Match_CheckOperandCountOp : Match_Op<"check_operand_count"> {
   }];
 }
 
-def Match_CheckResultCountOp : Match_Op<"check_result_count"> {
+def Match_CheckResultCountOp : Match_Op<"check_result_count", [Match_Question]> {
   let summary = "Test the result count of an operation";
   let arguments = (ins PDL_Operation:$op,
                        ConfinedAttr<I32Attr, [IntNonNegative]>:$count,

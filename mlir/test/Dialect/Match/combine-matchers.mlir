@@ -48,16 +48,20 @@ module {
 // -----
 
 // CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
-// CHECK-NEXT:    check_operand_count %arg0 is 0
-// CHECK-NEXT:    check_result_count %arg0 is 0
 // CHECK-NEXT:    switch_op_name %arg0
 // CHECK-NEXT:    case "foo.op" {
+// CHECK-NEXT:      check_operand_count %arg0 is 0
+// CHECK-NEXT:      check_result_count %arg0 is 0
 // CHECK-NEXT:      success @rewriters::@r benefit(1)
 // CHECK-NEXT:    }
 // CHECK-NEXT:    case "bar.op" {
+// CHECK-NEXT:      check_operand_count %arg0 is 0
+// CHECK-NEXT:      check_result_count %arg0 is 0
 // CHECK-NEXT:      success @rewriters::@r0 benefit(2)
 // CHECK-NEXT:    }
 // CHECK-NEXT:    case "baz.op" {
+// CHECK-NEXT:      check_operand_count %arg0 is 0
+// CHECK-NEXT:      check_result_count %arg0 is 0
 // CHECK-NEXT:      success @rewriters::@r1 benefit(3)
 // CHECK-NEXT:    }
 // CHECK-NOT:     try
@@ -162,13 +166,14 @@ module {
 
 // CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
 // CHECK-NEXT:    try {
+// CHECK-NEXT:      check_operand_count %arg0 is 7
 // CHECK-NEXT:      check_result_count %arg0 is 1
-// CHECK-NEXT:      try {
-// CHECK-NEXT:        check_operand_count %arg0 is 7
-// CHECK:           try {
-// CHECK-NEXT:        check_operand_count %arg0 is 8
-// CHECK:           try {
-// CHECK-NEXT:        check_operand_count %arg0 is 9
+// CHECK:         try {
+// CHECK-NEXT:      check_operand_count %arg0 is 8
+// CHECK-NEXT:      check_result_count %arg0 is 1
+// CHECK:         try {
+// CHECK-NEXT:      check_operand_count %arg0 is 9
+// CHECK-NEXT:      check_result_count %arg0 is 1
 // CHECK:         try {
 // CHECK-NEXT:      check_operand_count %arg0 is 10
 module {
@@ -401,6 +406,46 @@ module {
   match.matcher @c root(%root : !pdl.operation) {
     match.has_name %root, "baz.op"
     match.apply_native_constraint "guarded"(%root : !pdl.operation)
+    match.success @rewriters::@r benefit(1)
+  }
+}
+
+// -----
+
+// CHECK-LABEL: match.matcher @combined root(%arg0: !pdl.operation) {
+// CHECK-NEXT:    switch_op_name %arg0
+// CHECK-NEXT:    case "foo.op" {
+// CHECK:         case "bar.op" {
+// CHECK:         case "baz.op" {
+// CHECK:         case "qux.op" {
+module {
+  module @rewriters { module @r {} }
+  match.matcher @q_a root(%root : !pdl.operation) {
+    %0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
+    %1 = match.is_not_null %0 : !pdl.value
+    match.check_operand_count %root is 2
+    match.has_name %root, "foo.op"
+    match.success @rewriters::@r benefit(1)
+  }
+  match.matcher @q_b root(%root : !pdl.operation) {
+    %0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
+    %1 = match.is_not_null %0 : !pdl.value
+    match.check_operand_count %root is 2
+    match.has_name %root, "bar.op"
+    match.success @rewriters::@r benefit(1)
+  }
+  match.matcher @q_c root(%root : !pdl.operation) {
+    %0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
+    %1 = match.is_not_null %0 : !pdl.value
+    match.check_operand_count %root is 1
+    match.has_name %root, "baz.op"
+    match.success @rewriters::@r benefit(1)
+  }
+  match.matcher @q_d root(%root : !pdl.operation) {
+    %0 = match.get_operand 0 of %root : !match.optional<!pdl.value>
+    %1 = match.is_not_null %0 : !pdl.value
+    match.check_operand_count %root is 1
+    match.has_name %root, "qux.op"
     match.success @rewriters::@r benefit(1)
   }
 }
