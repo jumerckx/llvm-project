@@ -24,7 +24,7 @@ ACCUMULATE = {
 for _t in INT_TYPES:
     ACCUMULATE[_t] = ["arith.maxsi", "arith.minui", "arith.remui", "arith.shrui"]
 
-VARIANTS = ["drr", "pdll", "match-cpp", "match-cpp-split"]
+VARIANTS = ["drr", "pdll", "match-cpp", "match-cpp-all", "match-cpp-split"]
 
 
 class FunctionBuilder:

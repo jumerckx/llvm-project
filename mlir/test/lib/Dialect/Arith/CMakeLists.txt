@@ -22,7 +22,19 @@ add_custom_command(
           --ods=${ARITH_ODS} -I ${MLIR_MAIN_INCLUDE_DIR} -I ${MLIR_INCLUDE_DIR}
           --namespace=match_cpp -o ${ARITH_MATCH_OUTPUT}
   DEPENDS mlir-match-to-cpp ${ARITH_PDL_OUTPUT}
-  COMMENT "Generating combined C++ patterns from ArithCanonicalization.pdll"
+  COMMENT "Generating per-root C++ patterns from ArithCanonicalization.pdll"
+  )
+
+set(ARITH_MATCH_ALL_OUTPUT
+  ${CMAKE_CURRENT_BINARY_DIR}/ArithCanonicalizationMatchAll.h.inc)
+add_custom_command(
+  OUTPUT ${ARITH_MATCH_ALL_OUTPUT}
+  COMMAND $<TARGET_FILE:mlir-match-to-cpp> ${ARITH_PDL_OUTPUT}
+          --ods=${ARITH_ODS} -I ${MLIR_MAIN_INCLUDE_DIR} -I ${MLIR_INCLUDE_DIR}
+          --combine-matchers=all --namespace=match_cpp_all
+          -o ${ARITH_MATCH_ALL_OUTPUT}
+  DEPENDS mlir-match-to-cpp ${ARITH_PDL_OUTPUT}
+  COMMENT "Generating a single C++ pattern from ArithCanonicalization.pdll"
   )
 
 set(ARITH_MATCH_SPLIT_OUTPUT
@@ -31,7 +43,7 @@ add_custom_command(
   OUTPUT ${ARITH_MATCH_SPLIT_OUTPUT}
   COMMAND $<TARGET_FILE:mlir-match-to-cpp> ${ARITH_PDL_OUTPUT}
           --ods=${ARITH_ODS} -I ${MLIR_MAIN_INCLUDE_DIR} -I ${MLIR_INCLUDE_DIR}
-          --combine-matchers=false --namespace=match_cpp_split
+          --combine-matchers=none --namespace=match_cpp_split
           -o ${ARITH_MATCH_SPLIT_OUTPUT}
   DEPENDS mlir-match-to-cpp ${ARITH_PDL_OUTPUT}
   COMMENT "Generating per-pattern C++ patterns from ArithCanonicalization.pdll"
@@ -47,7 +59,8 @@ add_custom_command(
   COMMENT "Instrumenting the rewrites of the DRR arith canonicalization patterns"
   )
 add_custom_target(MLIRTestArithCanonicalizationMatchIncGen
-  DEPENDS ${ARITH_MATCH_OUTPUT} ${ARITH_MATCH_SPLIT_OUTPUT} ${ARITH_DRR_OUTPUT})
+  DEPENDS ${ARITH_MATCH_OUTPUT} ${ARITH_MATCH_ALL_OUTPUT}
+          ${ARITH_MATCH_SPLIT_OUTPUT} ${ARITH_DRR_OUTPUT})
 
 # Exclude tests from libMLIR.so
 add_mlir_library(MLIRArithTestPasses

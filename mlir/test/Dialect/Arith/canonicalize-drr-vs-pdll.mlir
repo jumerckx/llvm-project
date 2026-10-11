@@ -6,21 +6,26 @@
 // RUN: mlir-opt %s -test-arith-canonicalize-drr | FileCheck %s
 // RUN: mlir-opt %s -test-arith-canonicalize-pdll | FileCheck %s
 // RUN: mlir-opt %s -test-arith-canonicalize-match-cpp | FileCheck %s
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-all | FileCheck %s
 // RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-split | FileCheck %s
 // RUN: mlir-opt %s -test-arith-canonicalize-drr -o %t.drr
 // RUN: mlir-opt %s -test-arith-canonicalize-pdll -o %t.pdll
 // RUN: mlir-opt %s -test-arith-canonicalize-match-cpp -o %t.match-cpp
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-all -o %t.match-cpp-all
 // RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-split -o %t.match-cpp-split
 // RUN: diff %t.drr %t.pdll
 // RUN: diff %t.drr %t.match-cpp
+// RUN: diff %t.drr %t.match-cpp-all
 // RUN: diff %t.drr %t.match-cpp-split
 // RUN: mlir-opt %s -test-arith-canonicalize-drr=phase-timing -o %t.drr-timed 2>&1 | FileCheck %s --check-prefix=TIMING
 // RUN: mlir-opt %s -test-arith-canonicalize-pdll=phase-timing -o %t.pdll-timed 2>&1 | FileCheck %s --check-prefix=TIMING
 // RUN: mlir-opt %s -test-arith-canonicalize-match-cpp=phase-timing -o %t.match-cpp-timed 2>&1 | FileCheck %s --check-prefix=TIMING
+// RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-all=phase-timing -o %t.match-cpp-all-timed 2>&1 | FileCheck %s --check-prefix=TIMING
 // RUN: mlir-opt %s -test-arith-canonicalize-match-cpp-split=phase-timing -o %t.match-cpp-split-timed 2>&1 | FileCheck %s --check-prefix=TIMING
 // RUN: diff %t.drr %t.drr-timed
 // RUN: diff %t.drr %t.pdll-timed
 // RUN: diff %t.drr %t.match-cpp-timed
+// RUN: diff %t.drr %t.match-cpp-all-timed
 // RUN: diff %t.drr %t.match-cpp-split-timed
 
 // TIMING:      phase timing ===

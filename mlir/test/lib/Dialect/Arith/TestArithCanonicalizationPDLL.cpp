@@ -278,6 +278,7 @@ static void populatePDLLPatterns(RewritePatternSet &patterns) {
 //===----------------------------------------------------------------------===//
 
 #include "ArithCanonicalizationMatch.h.inc"
+#include "ArithCanonicalizationMatchAll.h.inc"
 #include "ArithCanonicalizationMatchSplit.h.inc"
 
 //===----------------------------------------------------------------------===//
@@ -392,12 +393,31 @@ struct TestArithCanonicalizationMatchCppPass
     return "test-arith-canonicalize-match-cpp";
   }
   StringRef getDescription() const final {
-    return "Apply the PDLL arith canonicalization patterns compiled to a "
-           "single combined C++ matcher";
+    return "Apply the PDLL arith canonicalization patterns compiled to one "
+           "combined C++ pattern per root operation";
   }
 
   void populatePatterns(RewritePatternSet &patterns) {
     match_cpp::populateGeneratedPatterns(patterns, RewritePhaseConfig());
+  }
+};
+
+struct TestArithCanonicalizationMatchCppAllPass
+    : public TestArithCanonicalizationBase<
+          TestArithCanonicalizationMatchCppAllPass> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      TestArithCanonicalizationMatchCppAllPass)
+
+  StringRef getArgument() const final {
+    return "test-arith-canonicalize-match-cpp-all";
+  }
+  StringRef getDescription() const final {
+    return "Apply the PDLL arith canonicalization patterns compiled to a "
+           "single combined C++ pattern";
+  }
+
+  void populatePatterns(RewritePatternSet &patterns) {
+    match_cpp_all::populateGeneratedPatterns(patterns, RewritePhaseConfig());
   }
 };
 
@@ -427,6 +447,7 @@ void registerTestArithCanonicalizationPasses() {
   PassRegistration<TestArithCanonicalizationDRRPass>();
   PassRegistration<TestArithCanonicalizationPDLLPass>();
   PassRegistration<TestArithCanonicalizationMatchCppPass>();
+  PassRegistration<TestArithCanonicalizationMatchCppAllPass>();
   PassRegistration<TestArithCanonicalizationMatchCppSplitPass>();
 }
 } // namespace test
