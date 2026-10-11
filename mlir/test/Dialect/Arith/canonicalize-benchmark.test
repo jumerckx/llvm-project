@@ -1,0 +1,11 @@
+# RUN: %python %mlir_src_root/test/lib/Dialect/Arith/arith_canonicalize_benchmark.py generate --functions 4 --templates 300 --match-rate 0.1 -o %t.mlir 2>&1 | FileCheck %s --check-prefix=GEN
+# RUN: mlir-opt %t.mlir -test-arith-canonicalize-drr=phase-timing -o %t.drr 2>&1 | FileCheck %s
+# RUN: mlir-opt %t.mlir -test-arith-canonicalize-pdll=phase-timing -o %t.pdll 2>&1 | FileCheck %s
+# RUN: mlir-opt %t.mlir -test-arith-canonicalize-match-cpp=phase-timing -o %t.match-cpp 2>&1 | FileCheck %s
+# RUN: mlir-opt %t.mlir -test-arith-canonicalize-match-cpp-split=phase-timing -o %t.match-cpp-split 2>&1 | FileCheck %s
+# RUN: diff %t.drr %t.pdll
+# RUN: diff %t.drr %t.match-cpp
+# RUN: diff %t.drr %t.match-cpp-split
+
+# GEN: generated 4 functions, {{[0-9]+}} ops; templates: {{[1-9][0-9]*}} matches
+# CHECK: pattern applications, {{[1-9][0-9]*}} rewrites
