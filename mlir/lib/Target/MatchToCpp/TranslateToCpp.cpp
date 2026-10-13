@@ -223,7 +223,7 @@ std::string MatcherCppEmitter::typeLiteral(Type t) {
 
 std::string MatcherCppEmitter::attrLiteral(Attribute a) {
   if (auto ia = dyn_cast<IntegerAttr>(a)) {
-    APInt v = ia.getValue();
+    const APInt& v = ia.getValue();
     if (v.getBitWidth() <= 64) {
       std::string str;
       llvm::raw_string_ostream ss(str);
@@ -569,33 +569,33 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
   };
 
   return llvm::TypeSwitch<Operation *, LogicalResult>(op)
-      .Case<TryOp>([&](TryOp o) { return emitTry(o); })
-      .Case<ForEachOp>([&](ForEachOp o) { return emitForEach(o); })
-      .Case<SwitchOpNameOp>(
+      .Case([&](TryOp o) { return emitTry(o); })
+      .Case([&](ForEachOp o) { return emitForEach(o); })
+      .Case(
           [&](SwitchOpNameOp o) { return emitSwitchOpName(o, failAction); })
-      .Case<SwitchTypeOp>(
+      .Case(
           [&](SwitchTypeOp o) { return emitSwitchType(o, failAction); })
-      .Case<SuccessOp>([&](SuccessOp o) { return emitSuccess(o); })
-      .Case<ConstantAttributeOp>([&](ConstantAttributeOp o) {
+      .Case([&](SuccessOp o) { return emitSuccess(o); })
+      .Case([&](ConstantAttributeOp o) {
         std::string v = declareName(o.getResult());
         indent() << "::mlir::Attribute " << v << " = "
                  << attrLiteral(o.getValue()) << ";\n";
         return success();
       })
-      .Case<ConstantTypeOp>([&](ConstantTypeOp o) {
+      .Case([&](ConstantTypeOp o) {
         std::string v = declareName(o.getResult());
         indent() << "::mlir::Type " << v << " = " << typeLiteral(o.getValue())
                  << ";\n";
         return success();
       })
-      .Case<ConstantTypesOp>([&](ConstantTypesOp o) {
+      .Case([&](ConstantTypesOp o) {
         std::string v = declareName(o.getResult());
         indent() << "::llvm::SmallVector<::mlir::Type> " << v << "{";
         emitTypeLiterals(o.getValue());
         os << "};\n";
         return success();
       })
-      .Case<GetOperandOp>([&](GetOperandOp o) {
+      .Case([&](GetOperandOp o) {
         std::string opName = getName(o.getOp());
         std::string v = declareName(o.getResult());
         if (const ConcreteBinding *b = concreteOf(o.getOp())) {
@@ -613,7 +613,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
                  << "->getOperand(" << o.getIndex() << ") : ::mlir::Value();\n";
         return success();
       })
-      .Case<GetResultOp>([&](GetResultOp o) {
+      .Case([&](GetResultOp o) {
         std::string opName = getName(o.getOp());
         std::string v = declareName(o.getResult());
         if (const ConcreteBinding *b = concreteOf(o.getOp())) {
@@ -630,17 +630,17 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
                  << "->getResult(" << o.getIndex() << ") : ::mlir::Value();\n";
         return success();
       })
-      .Case<GetOperandsOp>([&](GetOperandsOp o) {
+      .Case([&](GetOperandsOp o) {
         emitGetValues(o.getOp(), o.getIndex(), o.getResult(),
                       /*operands=*/true, /*optional=*/true);
         return success();
       })
-      .Case<GetResultsOp>([&](GetResultsOp o) {
+      .Case([&](GetResultsOp o) {
         emitGetValues(o.getOp(), o.getIndex(), o.getResult(),
                       /*operands=*/false, /*optional=*/true);
         return success();
       })
-      .Case<GetAttributeOp>([&](GetAttributeOp o) {
+      .Case([&](GetAttributeOp o) {
         std::string v = declareName(o.getResult());
         if (const ConcreteBinding *b = concreteOf(o.getOp())) {
           if (const std::string *getter =
@@ -654,7 +654,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
                  << "->getAttr(\"" << o.getName() << "\");\n";
         return success();
       })
-      .Case<GetDefiningOpOp>([&](GetDefiningOpOp o) {
+      .Case([&](GetDefiningOpOp o) {
         std::string v = declareName(o.getResult());
         if (isRangeType(o.getValue().getType())) {
           std::string r = getName(o.getValue());
@@ -667,7 +667,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
         }
         return success();
       })
-      .Case<GetValueTypeOp>([&](GetValueTypeOp o) {
+      .Case([&](GetValueTypeOp o) {
         std::string v = declareName(o.getResult());
         if (isRangeType(o.getValue().getType()))
           indent() << "::mlir::TypeRange " << v << " = ::mlir::ValueRange("
@@ -677,20 +677,20 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
                    << ".getType();\n";
         return success();
       })
-      .Case<GetAttributeTypeOp>([&](GetAttributeTypeOp o) {
+      .Case([&](GetAttributeTypeOp o) {
         std::string v = declareName(o.getResult());
         indent() << "::mlir::Type " << v
                  << " = ::llvm::cast<::mlir::TypedAttr>("
                  << getName(o.getAttribute()) << ").getType();\n";
         return success();
       })
-      .Case<GetUsersOp>([&](GetUsersOp o) {
+      .Case([&](GetUsersOp o) {
         std::string v = declareName(o.getResult());
         indent() << "auto " << v << " = " << getName(o.getValue())
                  << ".getUsers();\n";
         return success();
       })
-      .Case<ExtractOp>([&](ExtractOp o) {
+      .Case([&](ExtractOp o) {
         std::string r = getName(o.getRange());
         std::string v = declareName(o.getResult());
         Type elemTy = o.getResult().getType();
@@ -705,7 +705,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
                    << "]) : " << ty << "();\n";
         return success();
       })
-      .Case<IsNotNullOp>([&](IsNotNullOp o) {
+      .Case([&](IsNotNullOp o) {
         std::string name = getName(o.getOptionalValue());
         if (isa<pdl::OperationType>(o.getUnwrapped().getType()))
           locOps.push_back(o.getUnwrapped());
@@ -714,7 +714,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
           return success();
         }
         Type inner =
-            cast<OptionalType>(o.getOptionalValue().getType()).getInnerType();
+            o.getOptionalValue().getType().getInnerType();
         if (isRangeType(inner)) {
           fail("!" + name);
           std::string u = declareName(o.getUnwrapped());
@@ -725,7 +725,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
         }
         return success();
       })
-      .Case<HasNameOp>([&](HasNameOp o) {
+      .Case([&](HasNameOp o) {
         bool isRootKind = o.getOp() == rootValue && o.getName() == rootKind;
         if (const OpInfo *info = registry.lookup(o.getName())) {
           bindConcrete(o.getOp(), *info, /*alreadyKnownName=*/isRootKind,
@@ -738,7 +738,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
              o.getName().str() + "\"");
         return success();
       })
-      .Case<EqualOp>([&](EqualOp o) {
+      .Case([&](EqualOp o) {
         if (isRangeType(o.getLhs().getType()))
           fail("!::llvm::equal(" + getName(o.getLhs()) + ", " +
                getName(o.getRhs()) + ")");
@@ -746,12 +746,12 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
           fail(getName(o.getLhs()) + " != " + getName(o.getRhs()));
         return success();
       })
-      .Case<HasTypeOp>([&](HasTypeOp o) {
+      .Case([&](HasTypeOp o) {
         fail(getName(o.getTypeValue()) +
              " != " + typeLiteral(o.getConstantType()));
         return success();
       })
-      .Case<HasTypesOp>([&](HasTypesOp o) {
+      .Case([&](HasTypesOp o) {
         std::string arr = freshId("expected");
         indent() << "{\n";
         ++indentLevel;
@@ -767,11 +767,11 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
         indent() << "}\n";
         return success();
       })
-      .Case<HasAttrValueOp>([&](HasAttrValueOp o) {
+      .Case([&](HasAttrValueOp o) {
         fail(getName(o.getAttribute()) + " != " + attrLiteral(o.getValue()));
         return success();
       })
-      .Case<CheckOperandCountOp>([&](CheckOperandCountOp o) {
+      .Case([&](CheckOperandCountOp o) {
         if (const ConcreteBinding *b = concreteOf(o.getOp()))
           if (auto fixed = b->info->getFixedNumOperands())
             if (o.getAtLeast() ? *fixed >= o.getCount()
@@ -781,7 +781,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
              (o.getAtLeast() ? "< " : "!= ") + Twine(o.getCount()));
         return success();
       })
-      .Case<CheckResultCountOp>([&](CheckResultCountOp o) {
+      .Case([&](CheckResultCountOp o) {
         if (const ConcreteBinding *b = concreteOf(o.getOp()))
           if (auto fixed = b->info->getFixedNumResults())
             if (o.getAtLeast() ? *fixed >= o.getCount()
@@ -791,7 +791,7 @@ LogicalResult MatcherCppEmitter::emitSingle(Operation *op,
              (o.getAtLeast() ? "< " : "!= ") + Twine(o.getCount()));
         return success();
       })
-      .Case<ApplyNativeConstraintOp>([&](ApplyNativeConstraintOp o) {
+      .Case([&](ApplyNativeConstraintOp o) {
         return emitNativeCall(
             o, o.getName(), o.getArgs(), o.getConstraintResults(),
             o.getIsNegated() ? "::mlir::succeeded" : "::mlir::failed",
