@@ -1,0 +1,890 @@
+//===- ArithCanonicalization.pdll - PDLL port of arith DRR patterns -------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// A one-to-one port of the DRR patterns in
+// lib/Dialect/Arith/IR/ArithCanonicalization.td to PDLL, used to compare the
+// performance of PDL-based rewrites against DRR-generated C++ rewrites.
+//
+// Pattern names and benefits match the DRR patterns (DRR's benefit is the
+// number of matched ops, not counting `ConstantLikeMatcher` leaves).
+//
+// Optional / default-valued attributes (overflowFlags, nonNeg, fastmath,
+// roundingmode, isExact) may be absent (null) on an operation, and binding them
+// with `{name = attr}` in a PDL match would make the match fail. They are
+// therefore read through native rewrites instead. A null attribute returned by
+// a native rewrite is dropped when PDL creates an operation, which yields the
+// op's default value.
+//
+//===----------------------------------------------------------------------===//
+
+#include "mlir/Dialect/Arith/IR/ArithOps.td"
+
+//===----------------------------------------------------------------------===//
+// Native constraints
+//===----------------------------------------------------------------------===//
+
+// Native constraints that return a value can't be defined inline in PDLL; these
+// are registered in TestArithCanonicalizationPDLL.cpp. They implement DRR's
+// `(ConstantLikeMatcher <AttrConstraint>:$c)` on the value `$c` is bound to.
+
+// ConstantLikeMatcher AnyAttr.
+Constraint ConstantValue(value: Value) -> Attr;
+// ConstantLikeMatcher APIntAttr.
+Constraint ConstantIntValue(value: Value) -> Attr;
+// ConstantLikeMatcher TypedAttrInterface.
+Constraint ConstantTypedValue(value: Value) -> Attr;
+
+// ConstantLikeMatcher ConstantAttr<I1Attr, "0"> / ConstantAttr<I1Attr, "1">.
+Constraint IsConstantFalse(value: Value) [{
+  return success(isConstantI1(value, false));
+}];
+Constraint IsConstantTrue(value: Value) [{
+  return success(isConstantI1(value, true));
+}];
+
+Constraint IsScalarOrHasStaticShape(value: Value) [{
+  return success(!::llvm::isa<::mlir::ShapedType>(value.getType()) ||
+                 ::llvm::cast<::mlir::ShapedType>(value.getType())
+                     .hasStaticShape());
+}];
+
+Constraint IsScalarOrSplatNegativeOne(attr: Attr) [{
+  FailureOr<APInt> value = getIntOrSplatIntValue(attr);
+  return success(succeeded(value) && value->isAllOnes());
+}];
+
+Constraint IsScalarOrSplatOne(attr: Attr) [{
+  FailureOr<APInt> value = getIntOrSplatIntValue(attr);
+  return success(succeeded(value) && value->isStrictlyPositive() &&
+                 *value == 1);
+}];
+
+Constraint IntAttrTypeMatchesResult(res: Value, attr: Attr) [{
+  return success(res.getType() == cast<IntegerAttr>(attr).getType());
+}];
+
+Constraint IsEqualityCmpIPredicate(pred: Attr) [{
+  arith::CmpIPredicate value = cast<arith::CmpIPredicateAttr>(pred).getValue();
+  return success(value == arith::CmpIPredicate::eq ||
+                 value == arith::CmpIPredicate::ne);
+}];
+
+Constraint HasNoUses(value: Value) [{
+  return success(value.use_empty());
+}];
+
+Constraint HasDefaultRoundingMode(op: Op) [{
+  return success(
+      !cast<arith::ArithRoundingModeInterface>(op).getRoundingModeAttr());
+}];
+
+Constraint ValueWiderThan(a: Value, b: Value) [{
+  return success(getScalarOrElementWidth(a) > getScalarOrElementWidth(b) &&
+                 getScalarOrElementWidth(b) > 0);
+}];
+
+Constraint TruncationMatchesShiftAmount(x: Value, tr: Value, c: Attr) [{
+  FailureOr<APInt> value = getIntOrSplatIntValue(c);
+  return success(succeeded(value) &&
+                 (getScalarOrElementWidth(x) - getScalarOrElementWidth(tr)) ==
+                     *value);
+}];
+
+Constraint IsNegZeroFloat(attr: Attr) [{
+  return success(m_NegZeroFloat().match(attr));
+}];
+
+//===----------------------------------------------------------------------===//
+// Native rewrites
+//===----------------------------------------------------------------------===//
+
+Rewrite AddIntAttrs(res: Value, lhs: Attr, rhs: Attr) -> Attr [{
+  return addIntegerAttrs(rewriter, res, lhs, rhs);
+}];
+Rewrite SubIntAttrs(res: Value, lhs: Attr, rhs: Attr) -> Attr [{
+  return subIntegerAttrs(rewriter, res, lhs, rhs);
+}];
+Rewrite MulIntAttrs(res: Value, lhs: Attr, rhs: Attr) -> Attr [{
+  return mulIntegerAttrs(rewriter, res, lhs, rhs);
+}];
+Rewrite AndIntAttrs(res: Value, lhs: Attr, rhs: Attr) -> Attr [{
+  return andIntegerAttrs(rewriter, res, lhs, rhs);
+}];
+Rewrite OrIntAttrs(res: Value, lhs: Attr, rhs: Attr) -> Attr [{
+  return orIntegerAttrs(rewriter, res, lhs, rhs);
+}];
+Rewrite XorIntAttrs(res: Value, lhs: Attr, rhs: Attr) -> Attr [{
+  return xorIntegerAttrs(rewriter, res, lhs, rhs);
+}];
+
+Rewrite GetZeroAttr(value: Value) -> Attr [{
+  return rewriter.getZeroAttr(value.getType());
+}];
+
+// Merge the overflow flags of two ops implementing
+// ArithIntegerOverflowFlagsInterface (DRR: MergeOverflow).
+Rewrite MergeOverflow(a: Op, b: Op) -> Attr [{
+  return mergeOverflowFlags(a, b);
+}];
+
+Rewrite InvertPredicate(pred: Attr) -> Attr [{
+  return invertPredicate(cast<arith::CmpIPredicateAttr>(pred));
+}];
+
+// Accessors for optional / default-valued attributes; may return null.
+Rewrite OverflowFlagsOf(op: Op<arith.trunci>) -> Attr [{
+  return op.getOverflowFlagsAttr();
+}];
+Rewrite IsExactOf(op: Op<arith.shrsi>) -> Attr [{
+  return op.getIsExactAttr();
+}];
+Rewrite NonNegOf(op: Op<arith.extui>) -> Attr [{
+  return op.getNonNegAttr();
+}];
+Rewrite UIToFPNonNegOf(op: Op<arith.uitofp>) -> Attr [{
+  return op.getNonNegAttr();
+}];
+Rewrite FastMathOf(op: Op) -> Attr [{
+  return cast<arith::ArithFastMathInterface>(op).getFastMathFlagsAttr();
+}];
+Rewrite RoundingModeOf(op: Op) -> Attr [{
+  return cast<arith::ArithRoundingModeInterface>(op).getRoundingModeAttr();
+}];
+
+// nneg of an op combining two extui ops whose result is non-negative only if
+// both operands are (xori, ori).
+Rewrite NonNegOfBoth(a: Op<arith.extui>, b: Op<arith.extui>) -> Attr [{
+  UnitAttr lhs = a.getNonNegAttr(), rhs = b.getNonNegAttr();
+  return (lhs && rhs) ? lhs : UnitAttr();
+}];
+// nneg of an op combining two extui ops whose result is non-negative if
+// either operand is (andi).
+Rewrite NonNegOfEither(a: Op<arith.extui>, b: Op<arith.extui>) -> Attr [{
+  UnitAttr lhs = a.getNonNegAttr(), rhs = b.getNonNegAttr();
+  return lhs ? lhs : rhs;
+}];
+
+//===----------------------------------------------------------------------===//
+// AddIOp
+//===----------------------------------------------------------------------===//
+
+// addi(addi(x, c0), c1) -> addi(x, c0 + c1)
+Pattern AddIAddConstant with benefit(2) {
+  let inner = op<arith.addi>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.addi>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = AddIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.addi>(x, cst.0)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+// addi(subi(x, c0), c1) -> addi(x, c1 - c0)
+Pattern AddISubConstantRHS with benefit(2) {
+  let inner = op<arith.subi>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.addi>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = SubIntAttrs(root.0, c1, c0)};
+    replace root with op<arith.addi>(x, cst.0)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+// addi(subi(c0, x), c1) -> subi(c0 + c1, x)
+Pattern AddISubConstantLHS with benefit(2) {
+  let inner = op<arith.subi>(c0Value: Value, x: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.addi>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = AddIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.subi>(cst.0, x)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+// addi(x, muli(y, -1)) -> subi(x, y)
+Pattern AddIMulNegativeOneRhs with benefit(2) {
+  let mul = op<arith.muli>(y: Value, c0Value: Value);
+  let c0 = ConstantValue(c0Value);
+  IsScalarOrSplatNegativeOne(c0);
+  let root = op<arith.addi>(x: Value, mul.0);
+  replace root with op<arith.subi>(x, y);
+}
+
+// addi(muli(x, -1), y) -> subi(y, x)
+Pattern AddIMulNegativeOneLhs with benefit(2) {
+  let mul = op<arith.muli>(x: Value, c0Value: Value);
+  let c0 = ConstantValue(c0Value);
+  IsScalarOrSplatNegativeOne(c0);
+  let root = op<arith.addi>(mul.0, y: Value);
+  replace root with op<arith.subi>(y, x);
+}
+
+// muli(muli(x, c0), c1) -> muli(x, c0 * c1)
+Pattern MulIMulIConstant with benefit(2) {
+  let inner = op<arith.muli>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.muli>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  IntAttrTypeMatchesResult(root.0, c0);
+  IntAttrTypeMatchesResult(root.0, c1);
+  rewrite root with {
+    let cst = op<arith.constant> {value = MulIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.muli>(x, cst.0)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// AddUIExtendedOp
+//===----------------------------------------------------------------------===//
+
+// addui_extended(x, y) -> [addi(x, y), x], when the `overflow` result has no
+// uses.
+Pattern AddUIExtendedToAddI with benefit(1) {
+  let root = op<arith.addui_extended>(x: Value, y: Value);
+  HasNoUses(root.1);
+  rewrite root with {
+    let add = op<arith.addi>(x, y);
+    replace root with (add.0, x);
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// SubUIExtendedOp
+//===----------------------------------------------------------------------===//
+
+// subui_extended(x, y) -> [subi(x, y), x], when the `borrow` result has no
+// uses.
+Pattern SubUIExtendedToSubI with benefit(1) {
+  let root = op<arith.subui_extended>(x: Value, y: Value);
+  HasNoUses(root.1);
+  rewrite root with {
+    let sub = op<arith.subi>(x, y);
+    replace root with (sub.0, x);
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// SubIOp
+//===----------------------------------------------------------------------===//
+
+// subi(addi(x, c0), c1) -> addi(x, c0 - c1)
+Pattern SubIRHSAddConstant with benefit(2) {
+  let inner = op<arith.addi>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.subi>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = SubIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.addi>(x, cst.0);
+  };
+}
+
+// subi(c1, addi(x, c0)) -> subi(c1 - c0, x)
+Pattern SubILHSAddConstant with benefit(2) {
+  let inner = op<arith.addi>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.subi>(c1Value: Value, inner.0);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = SubIntAttrs(root.0, c1, c0)};
+    replace root with op<arith.subi>(cst.0, x)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+// subi(subi(x, c0), c1) -> subi(x, c0 + c1)
+Pattern SubIRHSSubConstantRHS with benefit(2) {
+  let inner = op<arith.subi>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.subi>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = AddIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.subi>(x, cst.0)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+// subi(subi(c0, x), c1) -> subi(c0 - c1, x)
+Pattern SubIRHSSubConstantLHS with benefit(2) {
+  let inner = op<arith.subi>(c0Value: Value, x: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.subi>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = SubIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.subi>(cst.0, x)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+// subi(c1, subi(x, c0)) -> subi(c0 + c1, x)
+Pattern SubILHSSubConstantRHS with benefit(2) {
+  let inner = op<arith.subi>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.subi>(c1Value: Value, inner.0);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = AddIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.subi>(cst.0, x)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+// subi(c1, subi(c0, x)) -> addi(x, c1 - c0)
+Pattern SubILHSSubConstantLHS with benefit(2) {
+  let inner = op<arith.subi>(c0Value: Value, x: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.subi>(c1Value: Value, inner.0);
+  let c1 = ConstantIntValue(c1Value);
+  rewrite root with {
+    let cst = op<arith.constant> {value = SubIntAttrs(root.0, c1, c0)};
+    replace root with op<arith.addi>(x, cst.0)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+// subi(subi(a, b), a) -> subi(0, b)
+Pattern SubISubILHSRHSLHS with benefit(2) {
+  let x: Value;
+  let inner = op<arith.subi>(x, y: Value);
+  let root = op<arith.subi>(inner.0, x);
+  IsScalarOrHasStaticShape(y);
+  rewrite root with {
+    let zero = op<arith.constant> {value = GetZeroAttr(y)};
+    replace root with op<arith.subi>(zero.0, y)
+        {overflowFlags = MergeOverflow(inner, root)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// MulSIExtendedOp
+//===----------------------------------------------------------------------===//
+
+// mulsi_extended(x, y) -> [muli(x, y), x], when the `high` result is unused.
+Pattern MulSIExtendedToMulI with benefit(1) {
+  let root = op<arith.mulsi_extended>(x: Value, y: Value);
+  HasNoUses(root.1);
+  rewrite root with {
+    let mul = op<arith.muli>(x, y);
+    replace root with (mul.0, x);
+  };
+}
+
+// mulsi_extended(x, 1) -> [x, extsi(cmpi slt, x, 0)]
+Pattern MulSIExtendedRHSOne with benefit(1) {
+  let highType: Type;
+  let root = op<arith.mulsi_extended>(x: Value, c1Value: Value)
+      -> (_: Type, highType);
+  let c1 = ConstantValue(c1Value);
+  IsScalarOrSplatOne(c1);
+  rewrite root with {
+    let zero = op<arith.constant> {value = GetZeroAttr(x)};
+    let cmp = op<arith.cmpi>(x, zero.0) {predicate = attr<"2 : i64">}; // slt
+    let ext = op<arith.extsi>(cmp.0) -> (highType);
+    replace root with (x, ext.0);
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// MulUIExtendedOp
+//===----------------------------------------------------------------------===//
+
+// mului_extended(x, y) -> [muli(x, y), x], when the `high` result is unused.
+Pattern MulUIExtendedToMulI with benefit(1) {
+  let root = op<arith.mului_extended>(x: Value, y: Value);
+  HasNoUses(root.1);
+  rewrite root with {
+    let mul = op<arith.muli>(x, y);
+    replace root with (mul.0, x);
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// XOrIOp
+//===----------------------------------------------------------------------===//
+
+// xori(xori(x, c0), c1) -> xori(x, c0 ^ c1)
+Pattern XOrIXOrIConstant with benefit(2) {
+  let inner = op<arith.xori>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.xori>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  IntAttrTypeMatchesResult(root.0, c0);
+  IntAttrTypeMatchesResult(root.0, c1);
+  rewrite root with {
+    let cst = op<arith.constant> {value = XorIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.xori>(x, cst.0);
+  };
+}
+
+// not(cmpi(pred, a, b)) -> cmpi(~pred, a, b), where not(x) is xori(x, 1)
+Pattern XOrINotCmpI with benefit(2) {
+  let pred: Attr;
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = pred};
+  let root = op<arith.xori>(cmp.0, one: Value);
+  IsConstantTrue(one);
+  rewrite root with {
+    replace root with op<arith.cmpi>(a, b) {predicate = InvertPredicate(pred)};
+  };
+}
+
+// xor extui(x), extui(y) -> extui(xor(x,y))
+Pattern XOrIOfExtUI with benefit(3) {
+  let t: Type;
+  let lhs = op<arith.extui>(x: Value<t>);
+  let rhs = op<arith.extui>(y: Value<t>);
+  let root = op<arith.xori>(lhs.0, rhs.0);
+  rewrite root with {
+    let xor = op<arith.xori>(x, y);
+    replace root with op<arith.extui>(xor.0) {nonNeg = NonNegOfBoth(lhs, rhs)};
+  };
+}
+
+// xor extsi(x), extsi(y) -> extsi(xor(x,y))
+Pattern XOrIOfExtSI with benefit(3) {
+  let t: Type;
+  let root = op<arith.xori>(op<arith.extsi>(x: Value<t>).0,
+                            op<arith.extsi>(y: Value<t>).0);
+  rewrite root with {
+    let xor = op<arith.xori>(x, y);
+    replace root with op<arith.extsi>(xor.0);
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// CmpIOp
+//===----------------------------------------------------------------------===//
+
+// cmpi(== or !=, a ext iNN, b ext iNN) == cmpi(== or !=, a, b)
+Pattern CmpIExtSI with benefit(3) {
+  let t: Type;
+  let pred: Attr;
+  let root = op<arith.cmpi>(op<arith.extsi>(a: Value<t>).0,
+                            op<arith.extsi>(b: Value<t>).0)
+      {predicate = pred};
+  IsEqualityCmpIPredicate(pred);
+  replace root with op<arith.cmpi>(a, b) {predicate = pred};
+}
+
+// cmpi(== or !=, a ext iNN, b ext iNN) == cmpi(== or !=, a, b)
+Pattern CmpIExtUI with benefit(3) {
+  let t: Type;
+  let pred: Attr;
+  let root = op<arith.cmpi>(op<arith.extui>(a: Value<t>).0,
+                            op<arith.extui>(b: Value<t>).0)
+      {predicate = pred};
+  IsEqualityCmpIPredicate(pred);
+  replace root with op<arith.cmpi>(a, b) {predicate = pred};
+}
+
+//===----------------------------------------------------------------------===//
+// SelectOp
+//===----------------------------------------------------------------------===//
+
+// select(not(pred), a, b) => select(pred, b, a)
+Pattern SelectNotCond with benefit(2) {
+  let notOp = op<arith.xori>(pred: Value, onesValue: Value);
+  let ones = ConstantIntValue(onesValue);
+  IsScalarOrSplatNegativeOne(ones);
+  let root = op<arith.select>(notOp.0, a: Value, b: Value);
+  replace root with op<arith.select>(pred, b, a);
+}
+
+// select(pred, select(pred, a, b), c) => select(pred, a, c)
+Pattern RedundantSelectTrue with benefit(2) {
+  let pred: Value;
+  let inner = op<arith.select>(pred, a: Value, _: Value);
+  let root = op<arith.select>(pred, inner.0, c: Value);
+  replace root with op<arith.select>(pred, a, c);
+}
+
+// select(pred, a, select(pred, b, c)) => select(pred, a, c)
+Pattern RedundantSelectFalse with benefit(2) {
+  let pred: Value;
+  let inner = op<arith.select>(pred, _: Value, c: Value);
+  let root = op<arith.select>(pred, a: Value, inner.0);
+  replace root with op<arith.select>(pred, a, c);
+}
+
+// select(pred, false, true) => not(pred)
+Pattern SelectI1ToNot with benefit(1) {
+  let root = op<arith.select>(pred: Value, falseValue: Value, trueValue: Value);
+  IsConstantFalse(falseValue);
+  IsConstantTrue(trueValue);
+  rewrite root with {
+    let one = op<arith.constant> {value = attr<"true">};
+    replace root with op<arith.xori>(pred, one.0);
+  };
+}
+
+// select(cmpi pred, a, b), a, b => min/max(a, b)
+// The predicate literals are the i64 values of arith::CmpIPredicate:
+//   slt = 2, sle = 3, sgt = 4, sge = 5, ult = 6, ule = 7, ugt = 8, uge = 9.
+Pattern SelectCmpISltToMinSI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"2 : i64">};
+  replace op<arith.select>(cmp.0, a, b) with op<arith.minsi>(a, b);
+}
+Pattern SelectCmpISleToMinSI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"3 : i64">};
+  replace op<arith.select>(cmp.0, a, b) with op<arith.minsi>(a, b);
+}
+Pattern SelectCmpISgtToMaxSI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"4 : i64">};
+  replace op<arith.select>(cmp.0, a, b) with op<arith.maxsi>(a, b);
+}
+Pattern SelectCmpISgeToMaxSI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"5 : i64">};
+  replace op<arith.select>(cmp.0, a, b) with op<arith.maxsi>(a, b);
+}
+Pattern SelectCmpIUltToMinUI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"6 : i64">};
+  replace op<arith.select>(cmp.0, a, b) with op<arith.minui>(a, b);
+}
+Pattern SelectCmpIUleToMinUI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"7 : i64">};
+  replace op<arith.select>(cmp.0, a, b) with op<arith.minui>(a, b);
+}
+Pattern SelectCmpIUgtToMaxUI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"8 : i64">};
+  replace op<arith.select>(cmp.0, a, b) with op<arith.maxui>(a, b);
+}
+Pattern SelectCmpIUgeToMaxUI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"9 : i64">};
+  replace op<arith.select>(cmp.0, a, b) with op<arith.maxui>(a, b);
+}
+
+// select(cmpi pred, a, b), b, a => inverse min/max(a, b)
+Pattern SelectCmpISltToMaxSI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"2 : i64">};
+  replace op<arith.select>(cmp.0, b, a) with op<arith.maxsi>(a, b);
+}
+Pattern SelectCmpISleToMaxSI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"3 : i64">};
+  replace op<arith.select>(cmp.0, b, a) with op<arith.maxsi>(a, b);
+}
+Pattern SelectCmpISgtToMinSI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"4 : i64">};
+  replace op<arith.select>(cmp.0, b, a) with op<arith.minsi>(a, b);
+}
+Pattern SelectCmpISgeToMinSI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"5 : i64">};
+  replace op<arith.select>(cmp.0, b, a) with op<arith.minsi>(a, b);
+}
+Pattern SelectCmpIUltToMaxUI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"6 : i64">};
+  replace op<arith.select>(cmp.0, b, a) with op<arith.maxui>(a, b);
+}
+Pattern SelectCmpIUleToMaxUI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"7 : i64">};
+  replace op<arith.select>(cmp.0, b, a) with op<arith.maxui>(a, b);
+}
+Pattern SelectCmpIUgtToMinUI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"8 : i64">};
+  replace op<arith.select>(cmp.0, b, a) with op<arith.minui>(a, b);
+}
+Pattern SelectCmpIUgeToMinUI with benefit(2) {
+  let cmp = op<arith.cmpi>(a: Value, b: Value) {predicate = attr<"9 : i64">};
+  replace op<arith.select>(cmp.0, b, a) with op<arith.minui>(a, b);
+}
+
+//===----------------------------------------------------------------------===//
+// IndexCastOp
+//===----------------------------------------------------------------------===//
+
+// index_cast(extsi(x)) -> index_cast(x)
+Pattern IndexCastOfExtSI with benefit(2) {
+  let root = op<arith.index_cast>(op<arith.extsi>(x: Value).0);
+  replace root with op<arith.index_cast>(x);
+}
+
+//===----------------------------------------------------------------------===//
+// IndexCastUIOp
+//===----------------------------------------------------------------------===//
+
+// index_castui(extui(x)) -> index_castui(x)
+Pattern IndexCastUIOfExtUI with benefit(2) {
+  let ext = op<arith.extui>(x: Value);
+  let root = op<arith.index_castui>(ext.0);
+  rewrite root with {
+    replace root with op<arith.index_castui>(x) {nonNeg = NonNegOf(ext)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// BitcastOp
+//===----------------------------------------------------------------------===//
+
+// bitcast(type1, bitcast(type2, x)) -> bitcast(type1, x)
+Pattern BitcastOfBitcast with benefit(2) {
+  let root = op<arith.bitcast>(op<arith.bitcast>(x: Value).0);
+  replace root with op<arith.bitcast>(x);
+}
+
+//===----------------------------------------------------------------------===//
+// ExtSIOp
+//===----------------------------------------------------------------------===//
+
+// extsi(extui(x iN : iM) : iL) -> extui(x : iL)
+Pattern ExtSIOfExtUI with benefit(2) {
+  let ext = op<arith.extui>(x: Value);
+  let root = op<arith.extsi>(ext.0);
+  rewrite root with {
+    replace root with op<arith.extui>(x) {nonNeg = NonNegOf(ext)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// AndIOp
+//===----------------------------------------------------------------------===//
+
+// andi(andi(x, c0), c1) -> andi(x, c0 & c1)
+Pattern AndIAndIConstant with benefit(2) {
+  let inner = op<arith.andi>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.andi>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  IntAttrTypeMatchesResult(root.0, c0);
+  IntAttrTypeMatchesResult(root.0, c1);
+  rewrite root with {
+    let cst = op<arith.constant> {value = AndIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.andi>(x, cst.0);
+  };
+}
+
+// and extui(x), extui(y) -> extui(and(x,y))
+Pattern AndOfExtUI with benefit(3) {
+  let t: Type;
+  let lhs = op<arith.extui>(x: Value<t>);
+  let rhs = op<arith.extui>(y: Value<t>);
+  let root = op<arith.andi>(lhs.0, rhs.0);
+  rewrite root with {
+    let and = op<arith.andi>(x, y);
+    replace root with op<arith.extui>(and.0)
+        {nonNeg = NonNegOfEither(lhs, rhs)};
+  };
+}
+
+// and extsi(x), extsi(y) -> extsi(and(x,y))
+Pattern AndOfExtSI with benefit(3) {
+  let t: Type;
+  let root = op<arith.andi>(op<arith.extsi>(x: Value<t>).0,
+                            op<arith.extsi>(y: Value<t>).0);
+  rewrite root with {
+    let and = op<arith.andi>(x, y);
+    replace root with op<arith.extsi>(and.0);
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// OrIOp
+//===----------------------------------------------------------------------===//
+
+// ori(ori(x, c0), c1) -> ori(x, c0 | c1)
+Pattern OrIOrIConstant with benefit(2) {
+  let inner = op<arith.ori>(x: Value, c0Value: Value);
+  let c0 = ConstantIntValue(c0Value);
+  let root = op<arith.ori>(inner.0, c1Value: Value);
+  let c1 = ConstantIntValue(c1Value);
+  IntAttrTypeMatchesResult(root.0, c0);
+  IntAttrTypeMatchesResult(root.0, c1);
+  rewrite root with {
+    let cst = op<arith.constant> {value = OrIntAttrs(root.0, c0, c1)};
+    replace root with op<arith.ori>(x, cst.0);
+  };
+}
+
+// or extui(x), extui(y) -> extui(or(x,y))
+Pattern OrOfExtUI with benefit(3) {
+  let t: Type;
+  let lhs = op<arith.extui>(x: Value<t>);
+  let rhs = op<arith.extui>(y: Value<t>);
+  let root = op<arith.ori>(lhs.0, rhs.0);
+  rewrite root with {
+    let or = op<arith.ori>(x, y);
+    replace root with op<arith.extui>(or.0) {nonNeg = NonNegOfBoth(lhs, rhs)};
+  };
+}
+
+// or extsi(x), extsi(y) -> extsi(or(x,y))
+Pattern OrOfExtSI with benefit(3) {
+  let t: Type;
+  let root = op<arith.ori>(op<arith.extsi>(x: Value<t>).0,
+                           op<arith.extsi>(y: Value<t>).0);
+  rewrite root with {
+    let or = op<arith.ori>(x, y);
+    replace root with op<arith.extsi>(or.0);
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// TruncIOp
+//===----------------------------------------------------------------------===//
+
+// trunci(extsi(x)) -> extsi(x), when only the sign-extension bits are truncated
+Pattern TruncIExtSIToExtSI with benefit(2) {
+  let ext = op<arith.extsi>(x: Value);
+  let root = op<arith.trunci>(ext.0);
+  ValueWiderThan(ext.0, root.0);
+  ValueWiderThan(root.0, x);
+  replace root with op<arith.extsi>(x);
+}
+
+// trunci(extui(x)) -> extui(x), when only the zero-extension bits are truncated
+Pattern TruncIExtUIToExtUI with benefit(2) {
+  let ext = op<arith.extui>(x: Value);
+  let root = op<arith.trunci>(ext.0);
+  ValueWiderThan(ext.0, root.0);
+  ValueWiderThan(root.0, x);
+  rewrite root with {
+    replace root with op<arith.extui>(x) {nonNeg = NonNegOf(ext)};
+  };
+}
+
+// trunci(shrsi(x, c)) -> trunci(shrui(x, c))
+Pattern TruncIShrSIToTrunciShrUI with benefit(2) {
+  let shr = op<arith.shrsi>(x: Value, c0Value: Value);
+  let c0 = ConstantTypedValue(c0Value);
+  let root = op<arith.trunci>(shr.0);
+  TruncationMatchesShiftAmount(x, root.0, c0);
+  rewrite root with {
+    let cst = op<arith.constant> {value = c0};
+    let shrui = op<arith.shrui>(x, cst.0) {isExact = IsExactOf(shr)};
+    replace root with op<arith.trunci>(shrui.0)
+        {overflowFlags = OverflowFlagsOf(root)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// TruncFOp
+//===----------------------------------------------------------------------===//
+
+// truncf(sitofp(x)) -> sitofp(x) if default rounding mode.
+Pattern TruncFSIToFPToSIToFP with benefit(2) {
+  let root = op<arith.truncf>(op<arith.sitofp>(x: Value).0);
+  HasDefaultRoundingMode(root);
+  replace root with op<arith.sitofp>(x);
+}
+
+// truncf(uitofp(x)) -> uitofp(x) if default rounding mode.
+Pattern TruncFUIToFPToUIToFP with benefit(2) {
+  let fp = op<arith.uitofp>(x: Value);
+  let root = op<arith.truncf>(fp.0);
+  HasDefaultRoundingMode(root);
+  rewrite root with {
+    replace root with op<arith.uitofp>(x) {nonNeg = UIToFPNonNegOf(fp)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// SIToFPOp
+//===----------------------------------------------------------------------===//
+
+// sitofp(extsi(x)) -> sitofp(x)
+Pattern SIToFPOfExtSI with benefit(2) {
+  let root = op<arith.sitofp>(op<arith.extsi>(x: Value).0);
+  replace root with op<arith.sitofp>(x);
+}
+
+// sitofp(extui(x)) -> uitofp(x)
+Pattern SIToFPOfExtUI with benefit(2) {
+  let ext = op<arith.extui>(x: Value);
+  let root = op<arith.sitofp>(ext.0);
+  rewrite root with {
+    replace root with op<arith.uitofp>(x) {nonNeg = NonNegOf(ext)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// UIToFPOp
+//===----------------------------------------------------------------------===//
+
+// uitofp(extui(x)) -> uitofp(x)
+Pattern UIToFPOfExtUI with benefit(2) {
+  let ext = op<arith.extui>(x: Value);
+  let root = op<arith.uitofp>(ext.0);
+  rewrite root with {
+    replace root with op<arith.uitofp>(x) {nonNeg = NonNegOf(ext)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// AddFOp
+//===----------------------------------------------------------------------===//
+
+// addf(negf(x), y) -> subf(y, x)
+Pattern AddFOfNegFLhs with benefit(2) {
+  let root = op<arith.addf>(op<arith.negf>(x: Value).0, y: Value);
+  rewrite root with {
+    replace root with op<arith.subf>(y, x)
+        {fastmath = FastMathOf(root), roundingmode = RoundingModeOf(root)};
+  };
+}
+
+// addf(x, negf(y)) -> subf(x, y)
+Pattern AddFOfNegFRhs with benefit(2) {
+  let root = op<arith.addf>(x: Value, op<arith.negf>(y: Value).0);
+  rewrite root with {
+    replace root with op<arith.subf>(x, y)
+        {fastmath = FastMathOf(root), roundingmode = RoundingModeOf(root)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// SubFOp
+//===----------------------------------------------------------------------===//
+
+// subf(-0, x) -> negf(x)
+Pattern SubFOfNegZero with benefit(1) {
+  let root = op<arith.subf>(cValue: Value, x: Value);
+  let c = ConstantValue(cValue);
+  IsNegZeroFloat(c);
+  HasDefaultRoundingMode(root);
+  rewrite root with {
+    replace root with op<arith.negf>(x) {fastmath = FastMathOf(root)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// MulFOp
+//===----------------------------------------------------------------------===//
+
+// mulf(negf(x), negf(y)) -> mulf(x,y)
+Pattern MulFOfNegF with benefit(3) {
+  let t: Type;
+  let root = op<arith.mulf>(op<arith.negf>(x: Value<t>).0,
+                            op<arith.negf>(y: Value<t>).0);
+  HasDefaultRoundingMode(root);
+  rewrite root with {
+    replace root with op<arith.mulf>(x, y)
+        {fastmath = FastMathOf(root), roundingmode = RoundingModeOf(root)};
+  };
+}
+
+//===----------------------------------------------------------------------===//
+// DivFOp
+//===----------------------------------------------------------------------===//
+
+// divf(negf(x), negf(y)) -> divf(x,y)
+Pattern DivFOfNegF with benefit(3) {
+  let t: Type;
+  let root = op<arith.divf>(op<arith.negf>(x: Value<t>).0,
+                            op<arith.negf>(y: Value<t>).0);
+  HasDefaultRoundingMode(root);
+  rewrite root with {
+    replace root with op<arith.divf>(x, y)
+        {fastmath = FastMathOf(root), roundingmode = RoundingModeOf(root)};
+  };
+}
