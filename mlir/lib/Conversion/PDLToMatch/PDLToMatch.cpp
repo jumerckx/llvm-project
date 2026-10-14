@@ -138,14 +138,30 @@ static void buildCostGraph(ArrayRef<Value> roots, RootOrderingGraph &graph,
 }
 
 namespace {
+struct EmitterCache {
+  explicit EmitterCache(MLIRContext *ctx) {
+    Type value = pdl::ValueType::get(ctx), type = pdl::TypeType::get(ctx);
+    valueTypes[0] = value;
+    valueTypes[1] = pdl::RangeType::get(value);
+    typeTypes[0] = type;
+    typeTypes[1] = pdl::RangeType::get(type);
+  }
+
+  Type valueTypes[2];
+  Type typeTypes[2];
+  DenseMap<Type, Type> optionalTypes;
+  SmallVector<IntegerAttr> indexAttrs;
+};
+
 class MatchEmitter {
 public:
   MatchEmitter(OpBuilder &builder, pdl::PatternOp pattern,
                SymbolTable &rewriterSymbolTable,
-               function_ref<bool(StringRef)> canInferResultTypes)
+               function_ref<bool(StringRef)> canInferResultTypes,
+               EmitterCache &cache)
       : builder(builder), pattern(pattern), loc(pattern.getLoc()),
         rewriterSymbolTable(rewriterSymbolTable),
-        canInferResultTypes(canInferResultTypes) {}
+        canInferResultTypes(canInferResultTypes), cache(cache) {}
 
   FailureOr<match::RewriterOp> emit();
 
@@ -160,23 +176,25 @@ private:
   bool registerValue(Value pdlVal, Value val);
   Value getOrMaterialize(Value pdlVal);
 
-  Type valueType(bool range) {
-    Type type = builder.getType<pdl::ValueType>();
-    return range ? pdl::RangeType::get(type) : type;
-  }
+  Type valueType(bool range) { return cache.valueTypes[range]; }
 
-  Type typeType(bool range) {
-    Type type = builder.getType<pdl::TypeType>();
-    return range ? pdl::RangeType::get(type) : type;
-  }
+  Type typeType(bool range) { return cache.typeTypes[range]; }
 
   IntegerAttr indexAttr(std::optional<unsigned> index) {
-    return index ? builder.getI32IntegerAttr(*index) : IntegerAttr();
+    if (!index)
+      return IntegerAttr();
+    SmallVector<IntegerAttr> &attrs = cache.indexAttrs;
+    while (attrs.size() <= *index)
+      attrs.push_back(builder.getI32IntegerAttr(attrs.size()));
+    return attrs[*index];
   }
 
   template <typename OpT, typename... Args>
   Value navigate(Type type, Args &&...args) {
-    Value optional = OpT::create(builder, loc, match::OptionalType::get(type),
+    Type &optionalType = cache.optionalTypes[type];
+    if (!optionalType)
+      optionalType = match::OptionalType::get(type);
+    Value optional = OpT::create(builder, loc, optionalType,
                                  std::forward<Args>(args)...);
     return match::IsNotNullOp::create(builder, loc, type, optional)
         .getUnwrapped();
@@ -220,6 +238,7 @@ private:
   Location loc;
   SymbolTable &rewriterSymbolTable;
   function_ref<bool(StringRef)> canInferResultTypes;
+  EmitterCache &cache;
   DenseMap<Value, Value> valueMap;
 };
 } // namespace
@@ -472,7 +491,7 @@ FailureOr<match::RewriterOp> MatchEmitter::emit() {
       continue;
     Value connector = graph[target][source].connector;
     Value pos = valueMap.lookup(connector);
-    DenseMap<Value, OpIndex> parentMap = parentMaps.lookup(target);
+    const DenseMap<Value, OpIndex> &parentMap = parentMaps[target];
     for (Value value = connector; value != target;) {
       OpIndex opIndex = parentMap.lookup(value);
       emitUpwardTraversal(opIndex, pos);
@@ -509,13 +528,15 @@ mlir::convertPDLToMatch(ModuleOp module,
       ModuleOp::create(builder, module.getLoc(),
                        pdl_interp::PDLInterpDialect::getRewriterModuleName());
   SymbolTable rewriterSymbolTable(rewriterModule);
+  EmitterCache cache(module.getContext());
 
   LogicalResult result = success();
   for (pdl::PatternOp pattern :
        llvm::make_early_inc_range(module.getOps<pdl::PatternOp>())) {
     builder.setInsertionPoint(pattern);
     FailureOr<match::RewriterOp> rewriter =
-        MatchEmitter(builder, pattern, rewriterSymbolTable, canInferResultTypes)
+        MatchEmitter(builder, pattern, rewriterSymbolTable, canInferResultTypes,
+                     cache)
             .emit();
     if (failed(rewriter)) {
       result = failure();
