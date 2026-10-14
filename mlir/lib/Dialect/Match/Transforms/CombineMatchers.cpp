@@ -15,7 +15,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallPtrSet.h"
 
 namespace mlir {
 namespace match {
@@ -29,12 +28,19 @@ using namespace mlir::match;
 
 namespace {
 struct PoolKey {
-  OperationName name;
-  DictionaryAttr attrs;
+  Operation *op;
   SmallVector<Value, 4> operands;
+  bool ignoreAttrs = false;
 
   bool operator==(const PoolKey &o) const {
-    return name == o.name && attrs == o.attrs && operands == o.operands;
+    if (op->getName() != o.op->getName() || operands != o.operands ||
+        ignoreAttrs != o.ignoreAttrs)
+      return false;
+    if (ignoreAttrs || op == o.op)
+      return true;
+    return op->getRawDictionaryAttrs() == o.op->getRawDictionaryAttrs() &&
+           op->getName().compareOpProperties(op->getPropertiesStorage(),
+                                             o.op->getPropertiesStorage());
   }
 };
 } // namespace
@@ -43,9 +49,12 @@ namespace llvm {
 template <>
 struct DenseMapInfo<PoolKey> {
   static unsigned getHashValue(const PoolKey &k) {
-    return llvm::hash_combine(
-        k.name, k.attrs,
-        llvm::hash_combine_range(k.operands.begin(), k.operands.end()));
+    llvm::hash_code operands =
+        llvm::hash_combine_range(k.operands.begin(), k.operands.end());
+    if (k.ignoreAttrs)
+      return llvm::hash_combine(k.op->getName(), operands);
+    return llvm::hash_combine(k.op->getName(), k.op->getRawDictionaryAttrs(),
+                              k.op->hashProperties(), operands);
   }
   static bool isEqual(const PoolKey &a, const PoolKey &b) { return a == b; }
 };
@@ -58,6 +67,7 @@ struct MatcherInfo {
   DenseSet<Operation *> preds;
   DenseSet<Operation *> questions;
   SmallVector<Operation *> guards;
+  SmallVector<Operation *> orderedPreds;
   IRMapping toCanonical;
 };
 
@@ -117,8 +127,7 @@ Operation *
 Combiner::getOrCreatePoolOp(Operation *modelOp,
                             ArrayRef<Value> canonicalOperands,
                             const DenseSet<Operation *> &alreadyUsed) {
-  PoolKey key{modelOp->getName(), modelOp->getAttrDictionary(),
-              SmallVector<Value, 4>(canonicalOperands)};
+  PoolKey key{modelOp, SmallVector<Value, 4>(canonicalOperands)};
   if (auto it = poolDedup.find(key); it != poolDedup.end()) {
     if (!isa<ForEachOp>(modelOp) || !alreadyUsed.contains(it->second))
       return it->second;
@@ -137,12 +146,14 @@ Combiner::getOrCreatePoolOp(Operation *modelOp,
   }
 
   insertionIndex[poolOp] = nextInsertionIndex++;
+  key.op = poolOp;
   poolDedup[key] = poolOp;
 
   Operation *question = poolOp;
   if (poolOp->hasTrait<Question>()) {
-    PoolKey questionKey{poolOp->getName(), DictionaryAttr(), key.operands};
-    question = questionDedup.try_emplace(questionKey, poolOp).first->second;
+    PoolKey questionKey{poolOp, key.operands, /*ignoreAttrs=*/true};
+    question = questionDedup.try_emplace(std::move(questionKey), poolOp)
+                   .first->second;
   }
   questionOf[poolOp] = question;
   ++numAnswers[question];
@@ -206,6 +217,7 @@ LogicalResult Combiner::buildCanonicalPool() {
   poolRoot = poolBody->addArgument(pdl::OperationType::get(module.getContext()),
                                    module.getLoc());
 
+  matcherInfos.reserve(inputMatchers.size());
   for (MatcherOp matcher : inputMatchers) {
     MatcherInfo info;
     info.matcher = matcher;
@@ -235,31 +247,27 @@ LogicalResult Combiner::buildCanonicalPool() {
   return success();
 }
 
-static bool dependsOn(Operation *a, Operation *b) {
-  for (Value operand : b->getOperands()) {
-    if (operand.getDefiningOp() == a)
-      return true;
+static unsigned
+computeLayer(Operation *op, DenseMap<Operation *, unsigned> &layers,
+             const DenseMap<Operation *, SmallVector<Operation *, 2>> &guards) {
+  if (auto it = layers.find(op); it != layers.end())
+    return it->second;
+  unsigned layer = 0;
+  auto visit = [&](Operation *pred) {
+    if (pred)
+      layer = std::max(layer, computeLayer(pred, layers, guards) + 1);
+  };
+  for (Value operand : op->getOperands()) {
     if (auto arg = dyn_cast<BlockArgument>(operand))
-      if (arg.getOwner()->getParentOp() == a)
-        return true;
+      visit(arg.getOwner()->getParentOp());
+    else
+      visit(operand.getDefiningOp());
   }
-  return false;
-}
-
-template <typename Iterator, typename Compare>
-static void stableTopologicalSort(Iterator begin, Iterator end, Compare cmp) {
-  while (begin != end) {
-    llvm::SmallPtrSet<typename Iterator::value_type, 16> sortBeforeOthers;
-    for (auto i = begin; i != end; ++i) {
-      if (std::none_of(begin, end, [&](auto const &b) { return cmp(b, *i); }))
-        sortBeforeOthers.insert(*i);
-    }
-    auto const next = std::stable_partition(begin, end, [&](auto const &a) {
-      return sortBeforeOthers.contains(a);
-    });
-    assert(next != begin && "not a partial ordering");
-    begin = next;
-  }
+  if (auto it = guards.find(op); it != guards.end())
+    for (Operation *guard : it->second)
+      visit(guard);
+  layers[op] = layer;
+  return layer;
 }
 
 void Combiner::sortCanonicalPool() {
@@ -272,17 +280,32 @@ void Combiner::sortCanonicalPool() {
            std::make_tuple(primary[qb], secondary[qb], numAnswers[qb],
                            insertionIndex[qa], insertionIndex[a]);
   });
-  stableTopologicalSort(sortedPoolOps.begin(), sortedPoolOps.end(),
-                        [&](Operation *a, Operation *b) {
-                          return dependsOn(a, b) || guardEdges.contains({a, b});
-                        });
+
+  DenseMap<Operation *, SmallVector<Operation *, 2>> guards;
+  for (auto [guard, constraint] : guardEdges)
+    guards[constraint].push_back(guard);
+  DenseMap<Operation *, unsigned> layers;
   for (Operation *op : sortedPoolOps)
+    computeLayer(op, layers, guards);
+  llvm::stable_sort(sortedPoolOps, [&](Operation *a, Operation *b) {
+    return layers.lookup(a) < layers.lookup(b);
+  });
+  DenseMap<Operation *, unsigned> position;
+  for (auto [i, op] : llvm::enumerate(sortedPoolOps)) {
     op->moveBefore(poolBody.get(), poolBody->end());
+    position[op] = i;
+  }
+  for (MatcherInfo &info : matcherInfos) {
+    info.orderedPreds.assign(info.preds.begin(), info.preds.end());
+    llvm::sort(info.orderedPreds, [&](Operation *a, Operation *b) {
+      return position.lookup(a) < position.lookup(b);
+    });
+  }
 }
 
 void Combiner::propagate(std::unique_ptr<TreeNode> &node, MatcherInfo &info,
                          unsigned predIdx) {
-  if (predIdx == sortedPoolOps.size()) {
+  if (predIdx == info.orderedPreds.size()) {
     auto leaf = std::make_unique<TreeNode>();
     leaf->kind = TreeNode::Kind::Success;
     leaf->originalSuccess = info.success;
@@ -294,12 +317,7 @@ void Combiner::propagate(std::unique_ptr<TreeNode> &node, MatcherInfo &info,
     return;
   }
 
-  Operation *current = sortedPoolOps[predIdx];
-  if (!info.preds.contains(current)) {
-    propagate(node, info, predIdx + 1);
-    return;
-  }
-
+  Operation *current = info.orderedPreds[predIdx];
   if (!node) {
     auto fresh = std::make_unique<TreeNode>();
     fresh->kind = TreeNode::Kind::Test;
