@@ -16,6 +16,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -41,17 +42,17 @@ private:
   public:
     explicit PathScope(Lowerer &lowerer)
         : lowerer(lowerer), savedLocSize(lowerer.locOps.size()),
-          savedOpNames(lowerer.opNameMap) {}
+          savedRootKind(lowerer.rootKind) {}
     ~PathScope() {
       while (lowerer.locOps.size() > savedLocSize)
         lowerer.locOps.pop_back();
-      lowerer.opNameMap = std::move(savedOpNames);
+      lowerer.rootKind = savedRootKind;
     }
 
   private:
     Lowerer &lowerer;
     size_t savedLocSize;
-    DenseMap<Value, StringAttr> savedOpNames;
+    StringAttr savedRootKind;
   };
 
   LogicalResult lowerRegion(Region &region);
@@ -89,6 +90,11 @@ private:
     return llvm::map_to_vector(values, [&](Value v) { return lookup(v); });
   }
 
+  void setOpName(Value op, StringAttr name) {
+    if (op == matcherFunc.front().getArgument(0))
+      rootKind = name;
+  }
+
   void map(Value from, Value to, bool isLoc = false) {
     valueMap.map(from, to);
     if (isLoc && isa<pdl::OperationType>(to.getType()))
@@ -97,11 +103,12 @@ private:
 
   OpBuilder builder;
   pdl_interp::FuncOp matcherFunc;
+  SymbolTableCollection symbolTables;
   IRMapping valueMap;
   Block *currentBlock = nullptr;
   Block *failureBlock = nullptr;
   llvm::SmallSetVector<Value, 4> locOps;
-  DenseMap<Value, StringAttr> opNameMap;
+  StringAttr rootKind;
 };
 } // namespace
 
@@ -222,17 +229,16 @@ LogicalResult Lowerer::lowerSwitch(
 void Lowerer::lowerSuccess(SuccessOp op) {
   ArrayAttr generatedOps;
   if (auto rewriter = dyn_cast_or_null<pdl_interp::FuncOp>(
-          SymbolTable::lookupNearestSymbolFrom(matcherFunc,
+          symbolTables.lookupNearestSymbolFrom(matcherFunc,
                                                op.getRewriterAttr()))) {
-    SmallVector<StringRef> names;
+    SmallVector<Attribute> names;
     for (auto createOp :
          rewriter.getBody().getOps<pdl_interp::CreateOperationOp>())
-      names.push_back(createOp.getName());
+      names.push_back(createOp.getNameAttr());
     if (!names.empty())
-      generatedOps = builder.getStrArrayAttr(names);
+      generatedOps = builder.getArrayAttr(names);
   }
 
-  StringAttr rootKind = opNameMap.lookup(matcherFunc.front().getArgument(0));
   builder.setInsertionPointToEnd(currentBlock);
   Block *continuation = newBlock();
   pdl_interp::RecordMatchOp::create(
@@ -256,7 +262,7 @@ LogicalResult Lowerer::lowerOp(Operation *operation) {
         return lowerSwitch(
             op,
             [&](unsigned i) {
-              opNameMap[mapped] = cast<StringAttr>(op.getCaseNames()[i]);
+              setOpName(mapped, cast<StringAttr>(op.getCaseNames()[i]));
             },
             [&](Block *defaultDest, ArrayRef<Block *> dests) {
               pdl_interp::SwitchOperationNameOp::create(
@@ -367,7 +373,7 @@ LogicalResult Lowerer::lowerOp(Operation *operation) {
         Value mapped = lookup(op.getOp());
         emitTest<pdl_interp::CheckOperationNameOp>(loc, mapped,
                                                    op.getNameAttr());
-        opNameMap[mapped] = op.getNameAttr();
+        setOpName(mapped, op.getNameAttr());
         return success();
       })
       .Case([&](EqualOp op) {
