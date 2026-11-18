@@ -2552,8 +2552,16 @@ FlatSymbolRefAttr ModuleImport::convertCalleeName(llvm::CallBase *callInst) {
 }
 
 LogicalResult ModuleImport::convertIntrinsic(llvm::CallInst *inst) {
-  if (succeeded(iface.convertIntrinsic(builder, inst, *this)))
+  if (succeeded(iface.convertIntrinsic(builder, inst, *this))) {
+    Operation *op = lookupOperation(inst);
+    if (op && inst->getTailCallKind() != llvm::CallInst::TCK_None)
+      op->setDiscardableAttr(
+          LLVMDialect::getTailCallKindAttrName(),
+          TailCallKindAttr::get(
+              builder.getContext(),
+              convertTailCallKindFromLLVM(inst->getTailCallKind())));
     return success();
+  }
 
   Location loc = translateLoc(inst->getDebugLoc());
   return emitError(loc) << "unhandled intrinsic: " << renderValue(*inst);

@@ -552,3 +552,11 @@ llvm.func @callsite_empty(%arg0: i64) -> !llvm.ptr {
   %0 = llvm.call @alloc(%arg0) {llvm.callsite = array<i64>} : (i64) -> !llvm.ptr
   llvm.return %0 : !llvm.ptr
 }
+
+// -----
+
+llvm.func @tail_call_kind_not_a_kind(%arg0: i32) -> i32 {
+  // expected-error @below{{expected a tail call kind for llvm.tail_call_kind}}
+  %0 = llvm.intr.bswap(%arg0) {llvm.tail_call_kind = 1 : i32} : (i32) -> i32
+  llvm.return %0 : i32
+}

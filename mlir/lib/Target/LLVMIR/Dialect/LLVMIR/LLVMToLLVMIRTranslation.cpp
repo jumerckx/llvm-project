@@ -1031,6 +1031,17 @@ amendOperationImpl(Operation &op, ArrayRef<llvm::Instruction *> instructions,
     }
     return success();
   }
+  if (name == LLVMDialect::getTailCallKindAttrName()) {
+    auto tailCallKind = dyn_cast<TailCallKindAttr>(attribute.getValue());
+    if (!tailCallKind)
+      return op.emitOpError("expected a tail call kind for ")
+             << LLVMDialect::getTailCallKindAttrName();
+    for (llvm::Instruction *inst : instructions)
+      if (auto *call = dyn_cast<llvm::CallInst>(inst))
+        call->setTailCallKind(
+            convertTailCallKindToLLVM(tailCallKind.getTailCallKind()));
+    return success();
+  }
   return success();
 }
 
